@@ -9,7 +9,7 @@
  * - Version upgrades only ADD missing records, never overwrite existing ones
  */
 
-const DB_VERSION = "school_v1";
+const DB_VERSION = "school_v2.5_20260915";
 const DB_INIT_KEY = "school_db_init";
 const DB_VERSION_KEY = "school_db_version";
 
@@ -39,32 +39,28 @@ export function dbWrite(key, value) {
 }
 
 /**
- * Initialize the database on first launch.
- * 
- * RULE: If school_db_init exists → user already has data → do NOT overwrite anything.
- * Only runs once ever (first time the app is opened on this browser).
+ * Initialize the database on launch or version update.
  */
 export function dbInitOnce(seedData) {
- const alreadyInitialized = localStorage.getItem(DB_INIT_KEY);
- 
- if (alreadyInitialized) {
- // Database already set up → respect ALL existing user data
- return false;
- }
+  const currentVersion = localStorage.getItem(DB_VERSION_KEY);
+  
+  if (currentVersion === DB_VERSION) {
+    // Database already updated to current version
+    return false;
+  }
 
- // First time ever on this browser → seed all collections
- Object.entries(seedData).forEach(([key, value]) => {
- // Only write if key doesn't already have data
- if (localStorage.getItem(key) === null) {
- dbWrite(key, value);
- }
- });
+  // Version upgraded or first launch -> Sync fresh seed data
+  Object.entries(seedData).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      dbWrite(key, value);
+    }
+  });
 
- // Mark as initialized so we never run seed again
- localStorage.setItem(DB_INIT_KEY, DB_VERSION);
- localStorage.setItem(DB_VERSION_KEY, DB_VERSION);
- 
- return true;
+  // Mark as initialized with current version
+  localStorage.setItem(DB_INIT_KEY, DB_VERSION);
+  localStorage.setItem(DB_VERSION_KEY, DB_VERSION);
+  
+  return true;
 }
 
 /**
