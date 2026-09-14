@@ -1,0 +1,1710 @@
+import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useApp } from '../context/AppContext';
+import { exportToExcelCSV, openWhatsAppMessage } from '../utils/exportUtils';
+import { 
+ CreditCard, 
+ Receipt, 
+ CheckCircle2, 
+ Printer, 
+ DollarSign, 
+ Send,
+ Plus,
+ Calendar,
+ Trash2,
+ Check,
+ X,
+ Search,
+ ShieldAlert,
+ ShieldCheck,
+ Lock,
+ Edit3
+} from 'lucide-react';
+
+export const TuitionModule = () => {
+ const { lang, t, currentRole, currentUser, systemUsers, students = [], payTuition, updateStudent, selectedStudentId, addMessage, siteSettings } = useApp();
+
+ const isAr = lang === 'ar';
+ const safeStudents = students || [];
+
+  // Robust family grouping key helper (matches by parentName first, ignores generic phones)
+  const getFamilyKey = (s) => {
+    if (!s) return 'unknown';
+    const pName = (s.parentName || s.parent_name || '').toString().trim().toLowerCase();
+    const pPhone = (s.parentPhone || s.phone || '').toString().trim();
+
+    const isGenericPhone = !pPhone || pPhone === 'غير مسجل' || pPhone.includes('03 456 123') || pPhone.includes('000 000');
+    const isGenericName = !pName || pName === 'غير محدد' || pName.startsWith('والد الطالب') || pName.startsWith('parent of');
+
+    if (!isGenericName) {
+      return `name:${pName}`;
+    }
+    if (!isGenericPhone) {
+      return `phone:${pPhone}`;
+    }
+    return `id:${s.id}`;
+  };
+
+ // Read exchange rate from settings, fallback 89500
+ const LBP_RATE = Number(siteSettings?.exchangeRate) || 89500;
+
+ // Payment History Log State (stored in localStorage)
+ const [paymentHistory, setPaymentHistory] = useState(() => {
+ try { return JSON.parse(localStorage.getItem('school_payment_history') || '{}'); }
+ catch { return {}; }
+ });
+
+ // Sent Reminders Tracker State (stored in localStorage)
+ const [sentReminders, setSentReminders] = useState(() => {
+ try { return JSON.parse(localStorage.getItem('school_sent_reminders') || '{}'); }
+ catch { return {}; }
+ });
+
+ // Financial Search Query State
+ const [tuitionSearchQuery, setTuitionSearchQuery] = useState('');
+
+ const filteredStudents = safeStudents.filter((stu) => {
+ if (!tuitionSearchQuery.trim()) return true;
+ const q = tuitionSearchQuery.toLowerCase().trim();
+ const nameMatch = (stu.name || '').toLowerCase().includes(q) || (stu.nameEn || '').toLowerCase().includes(q);
+ const parentNameMatch = (stu.parentName || '').toLowerCase().includes(q);
+ const phoneMatch = (stu.parentPhone || '').includes(q) || (stu.phone || '').includes(q);
+ const gradeMatch = (stu.grade || '').toLowerCase().includes(q);
+ const idMatch = (stu.id || '').toLowerCase().includes(q);
+ return nameMatch || parentNameMatch || phoneMatch || gradeMatch || idMatch;
+ });
+
+  // Modal States
+  const [selectedStudentForPay, setSelectedStudentForPay] = useState(null); // student obj for direct payment
+  const [payAmount, setPayAmount] = useState('');
+  const [payDesc, setPayDesc] = useState('دفعة من القسط المدرسي');
+  const [payMethod, setPayMethod] = useState('fresh_cash');
+
+  const [selectedStudentForEditPaid, setSelectedStudentForEditPaid] = useState(null); // student obj for editing paid tuition
+  const [editPaidAmountInput, setEditPaidAmountInput] = useState('');
+  const [editPaidReasonInput, setEditPaidReasonInput] = useState('تعديل القسط المدفوع من قبل الإدارة');
+
+  // Admin Authorization State for Payments
+  const [adminPassInput, setAdminPassInput] = useState('');
+  const [adminPassError, setAdminPassError] = useState('');
+
+  // Dynamically resolve current Admin password & check if Admin is logged in
+  const adminAccount = (systemUsers || []).find(u => u.role === 'admin' || u.username === 'admin');
+  const currentAdminPassword = adminAccount?.password || '123123123';
+  const isAdminLoggedIn = currentUser && (currentUser.role === 'admin' || currentUser.role === 'assistant_admin' || currentUser.username === 'admin');
+
+  const [showReceiptModal, setShowReceiptModal] = useState(null);
+  const [showPrintStatementModal, setShowPrintStatementModal] = useState(false);
+  const [successToast, setSuccessToast] = useState(false);
+
+  // Toggle body class when receipt or statement modal is active to hide main page content on print
+  React.useEffect(() => {
+    if (showReceiptModal || showPrintStatementModal) {
+      document.body.classList.add('has-print-portal');
+    } else {
+      document.body.classList.remove('has-print-portal');
+    }
+    return () => {
+      document.body.classList.remove('has-print-portal');
+    };
+  }, [showReceiptModal, showPrintStatementModal]);
+
+  // Close any open modals when pressing ESC key
+  React.useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' || e.code === 'Escape') {
+        setShowReceiptModal(null);
+        setSelectedStudentForPay(null);
+        setAdminPassInput('');
+        setAdminPassError('');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Active student for Parent / Student View
+  const currentStudent = safeStudents.find((s) => s.id === selectedStudentId) || safeStudents[0];
+  const isOverduePeriod = new Date().getDate() > 5;
+
+  // Admin Financial Metrics in USD (Frozen accounts and Special Cases are excluded from active overdue dues)
+  const activeStudents = safeStudents.filter((s) => !s?.frozen && !s?.isSpecialCase);
+  const totalTuitionUSD = safeStudents.reduce((sum, s) => sum + (s?.isSpecialCase ? 0 : (Number(s?.tuitionTotal) || 0)), 0);
+  const totalAdminFeesUSD = safeStudents.reduce((sum, s) => sum + (s?.isSpecialCase ? 0 : (Number(s?.adminFees) || 0)), 0);
+  const totalTransportFeesUSD = safeStudents.reduce((sum, s) => sum + (s?.hasTransport ? (Number(s?.transportFee) || 0) : 0), 0);
+  const totalDiscountUSD = safeStudents.reduce((sum, s) => sum + (s?.isSpecialCase ? 0 : (Number(s?.tuitionDiscount) || 0)), 0);
+  const totalPaidUSD = safeStudents.reduce((sum, s) => sum + (Number(s?.tuitionPaid) || 0), 0);
+  
+  // Total overdue dues only includes active non-frozen, non-special-case students
+  const totalRemainingUSD = activeStudents.reduce((sum, s) => {
+    if (s?.isSpecialCase) return sum;
+    const tot = Number(s.tuitionTotal) || 0;
+    const adm = Number(s.adminFees) || 0;
+    const disc = Number(s.tuitionDiscount) || 0;
+    const paid = Number(s.tuitionPaid) || 0;
+    return sum + Math.max(0, tot + adm - disc - paid);
+  }, 0);
+
+  const savePaymentHistory = (updated) => {
+    setPaymentHistory(updated);
+    localStorage.setItem('school_payment_history', JSON.stringify(updated));
+  };
+
+  // ── Direct Payment Handler (Immediate Deduction with Admin Pass Check) ─────
+  const handleDirectPaySubmit = (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!selectedStudentForPay) return;
+
+    setAdminPassError('');
+
+    // If currentUser is NOT logged in as Admin, require Admin Password
+    if (!isAdminLoggedIn) {
+      const cleanEntered = (adminPassInput || '').trim();
+      const cleanAdminPass = (currentAdminPassword || '').trim();
+      const isValidAdminPass = (systemUsers || []).some(u => (u.role === 'admin' || u.username === 'admin') && u.password === cleanEntered) || cleanEntered === cleanAdminPass;
+
+      if (!cleanEntered || !isValidAdminPass) {
+        setAdminPassError(isAr ? 'كلمة سر المدير غير صحيحة! التعديل وإدخال الدفعات مجاز للمدير حصراً.' : 'Incorrect Admin password!');
+        return;
+      }
+    }
+
+    try {
+      const amountUSD = Number(payAmount);
+      if (!amountUSD || amountUSD <= 0) {
+        alert(isAr ? 'يرجى إدخال مبلغ دفعة صحيح (أكبر من صفر)' : 'Please enter a valid payment amount (> 0)');
+        return;
+      }
+
+      const stuId = selectedStudentForPay.id;
+
+      // 1. Deduct immediately in AppContext (updates tuitionPaid and persists)
+      payTuition(stuId, amountUSD, payMethod);
+
+      // 2. Save entry to payment history log for this student
+      const existingHistory = paymentHistory[stuId] || [];
+      const newEntry = {
+        id: `PAY-${Date.now()}`,
+        amount: amountUSD,
+        date: new Date().toISOString().split('T')[0],
+        desc: payDesc || 'دفعة مالية',
+        method: payMethod
+      };
+      const updatedHistory = {
+        ...paymentHistory,
+        [stuId]: [newEntry, ...existingHistory]
+      };
+      savePaymentHistory(updatedHistory);
+
+      // 3. Get active siblings for this family so all student names & combined dues appear on the receipt
+      const phoneKey = (selectedStudentForPay.parentPhone || selectedStudentForPay.phone || selectedStudentForPay.id || '').toString().trim();
+      const familySiblings = safeStudents.filter(s => {
+        if (!s || s.frozen) return false;
+        if (!s.parentPhone && !selectedStudentForPay.parentPhone) return s.id === selectedStudentForPay.id;
+        const sPhone = (s.parentPhone || s.phone || '').toString().trim();
+        return sPhone && sPhone === phoneKey;
+      });
+
+      const activeFamily = familySiblings.length > 0 ? familySiblings : [selectedStudentForPay];
+      const isMultiSib = activeFamily.length > 1;
+
+      // Calculate combined total dues across all active family members:
+      const familyTotalDuesUSD = activeFamily.reduce((sum, s) => {
+        const tot = Number(s.tuitionTotal) || 700;
+        const adm = Number(s.adminFees) || 0;
+        const disc = Number(s.tuitionDiscount) || 0;
+        return sum + Math.max(0, tot + adm - disc);
+      }, 0);
+
+      // Calculate total paid across all active family members (including new payment):
+      const familyTotalPaidUSD = activeFamily.reduce((sum, s) => {
+        return sum + (Number(s.tuitionPaid) || 0);
+      }, 0) + amountUSD;
+
+      // Remaining combined balance for all siblings:
+      const familyRemainingUSD = Math.max(0, Math.round((familyTotalDuesUSD - familyTotalPaidUSD) * 100) / 100);
+
+      const getFirstName = (fullName) => {
+        if (!fullName) return '';
+        const clean = String(fullName).trim();
+        return clean.split(' ')[0] || clean;
+      };
+
+      const allStudentNames = activeFamily.map(s => getFirstName(isAr ? (s.name || s.nameEn) : (s.nameEn || s.name))).join(' • ');
+      const stuNameStr = String(selectedStudentForPay.name || selectedStudentForPay.nameEn || 'تلميذ');
+      const parentNameVal = selectedStudentForPay.parentName || `عائلة ${stuNameStr.split(' ').slice(-1)[0]}`;
+
+      // 4. Open official receipt modal
+      const receipt = {
+        receiptNo: `REC-LB-${Date.now().toString().slice(-6)}`,
+        date: new Date().toISOString().split('T')[0],
+        parentName: parentNameVal,
+        studentName: allStudentNames,
+        grade: isMultiSib ? `عائلة (${activeFamily.length} إخوة)` : (isAr ? selectedStudentForPay.grade : selectedStudentForPay.gradeEn),
+        amountUSD: amountUSD,
+        totalDuesUSD: familyTotalDuesUSD,
+        remainingUSD: familyRemainingUSD,
+        method: payMethod,
+        isMultiSib: isMultiSib
+      };
+
+      setPayAmount('');
+      setPayDesc('دفعة من القسط المدرسي');
+      setAdminPassInput('');
+      setAdminPassError('');
+      setSelectedStudentForPay(null);
+      setShowReceiptModal(receipt);
+      setSuccessToast(true);
+      setTimeout(() => setSuccessToast(false), 4000);
+    } catch (err) {
+      console.error('Error submitting tuition payment:', err);
+      alert(isAr ? `حدث خطأ أثناء حفظ الدفعة: ${err.message}` : `Error saving payment: ${err.message}`);
+    }
+  };
+
+  // ── Edit Paid Tuition Handler ───────────────────────────────────────────────
+  const handleEditPaidSubmit = (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!selectedStudentForEditPaid) return;
+
+    setAdminPassError('');
+
+    if (!isAdminLoggedIn) {
+      const cleanEntered = (adminPassInput || '').trim();
+      const cleanAdminPass = (currentAdminPassword || '').trim();
+      const isValidAdminPass = (systemUsers || []).some(u => (u.role === 'admin' || u.username === 'admin') && u.password === cleanEntered) || cleanEntered === cleanAdminPass;
+
+      if (!cleanEntered || !isValidAdminPass) {
+        setAdminPassError(isAr ? 'كلمة سر المدير غير صحيحة! التعديل مجاز للمدير حصراً.' : 'Incorrect Admin password!');
+        return;
+      }
+    }
+
+    try {
+      const newPaidVal = Math.max(0, Number(editPaidAmountInput) || 0);
+      const stuId = selectedStudentForEditPaid.id;
+
+      updateStudent(stuId, { tuitionPaid: newPaidVal });
+
+      const existingHistory = paymentHistory[stuId] || [];
+      const editEntry = {
+        id: `PAY-EDIT-${Date.now()}`,
+        amount: newPaidVal,
+        date: new Date().toISOString().split('T')[0],
+        desc: editPaidReasonInput || 'تعديل القسط المدفوع إدارياً',
+        method: 'admin_edit'
+      };
+      const updatedHistory = {
+        ...paymentHistory,
+        [stuId]: [editEntry, ...existingHistory]
+      };
+      savePaymentHistory(updatedHistory);
+
+      setSelectedStudentForEditPaid(null);
+      setAdminPassInput('');
+      setAdminPassError('');
+      alert(isAr ? `تم تعديل القسط المدفوع للطالب (${selectedStudentForEditPaid.name}) بنجاح إلى $${newPaidVal} USD!` : `Updated paid tuition to $${newPaidVal} USD!`);
+    } catch (err) {
+      console.error('Error updating paid tuition:', err);
+      alert(isAr ? 'حدث خطأ أثناء تعديل القسط المدفوع!' : 'Error updating paid tuition');
+    }
+  };
+
+  const handleDeleteHistoryEntry = (stuId, entryId, amount) => {
+    if (!isAdminLoggedIn) {
+      const inputPass = prompt(isAr ? 'حذف قيد الدفعة يتطلب كلمة سر المدير:' : 'Enter Admin password to delete payment entry:');
+      if (!inputPass) return;
+      const cleanEntered = inputPass.trim();
+      const isValid = (systemUsers || []).some(u => (u.role === 'admin' || u.username === 'admin') && u.password === cleanEntered) || cleanEntered === currentAdminPassword;
+      if (!isValid) {
+        alert(isAr ? 'كلمة سر المدير غير صحيحة!' : 'Incorrect Admin password!');
+        return;
+      }
+    }
+
+    const existingHistory = paymentHistory[stuId] || [];
+    const updatedHistory = {
+      ...paymentHistory,
+      [stuId]: existingHistory.filter(e => e.id !== entryId)
+    };
+    savePaymentHistory(updatedHistory);
+  };
+
+ const handleSendIndividualReminder = (stu) => {
+ const totalUSD = Number(stu.tuitionTotal) || 700;
+ const adminUSD = Number(stu.adminFees) || 0;
+ const transportUSD = stu.hasTransport ? (Number(stu.transportFee) || 0) : 0;
+ const discountUSD = Number(stu.tuitionDiscount) || 0;
+ const paidUSD = Number(stu.tuitionPaid) || 0;
+ const remUSD = Math.max(0, totalUSD + adminUSD + transportUSD - discountUSD - paidUSD);
+
+ addMessage({
+ title: `تذكير مالي - قسط الطالب ${stu.name} ($ USD)`,
+ titleEn: `Financial Reminder - Tuition for ${stu.nameEn} ($ USD)`,
+ content: `نود تذكيركم بوجود قسط متبقي بقيمة $${remUSD.toLocaleString()} USD. نرجو السداد عبر Fresh USD أو OMT / Whish.`,
+ contentEn: `Reminder: Student remaining tuition balance is $${remUSD.toLocaleString()} USD. Please settle via Fresh USD or OMT / Whish.`,
+ targetType: 'student',
+ targetValue: stu.name,
+ category: 'financial',
+ priority: 'urgent'
+ });
+ alert(isAr ? 'تم إرسال مطالبة مالية خاصة بالدولار لولي الأمر!' : 'Sent individual USD tuition reminder!');
+ };
+
+ const handleSendWhatsAppReminder = (stu) => {
+ const phoneKey = (stu.parentPhone || stu.phone || stu.id).trim();
+ const parentPhone = stu.parentPhone || stu.phone || '+961 70 000 000';
+
+ const familyMembers = safeStudents.filter(s => {
+ if (!s.parentPhone && !stu.parentPhone) return s.id === stu.id;
+ return s.parentPhone && s.parentPhone.trim() === phoneKey;
+ });
+
+ const isMulti = familyMembers.length > 1;
+ const familyName = stu.parentName || (isMulti ? `عائلة ${stu.name.split(' ').slice(-1)[0]}` : (isAr ? stu.name : stu.nameEn));
+
+ const msg = isAr
+ ? `الى ولي امر التلميذ ( ${familyName} ) نود تذكيركم بضرورة تسديد القسط الشهري المستحق يرجى التسديد في اقرب وقت شاكرين تعاونكم الكريم`
+ : `To the parent of (${familyName}), we kindly remind you to settle the due monthly tuition payment at your earliest convenience. Thank you for your cooperation!`;
+
+ const nowTime = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+ setSentReminders((prev) => {
+ const updated = { ...prev, [phoneKey]: nowTime };
+ localStorage.setItem('school_sent_reminders', JSON.stringify(updated));
+ return updated;
+ });
+
+ openWhatsAppMessage(parentPhone, msg);
+ };
+
+ const handleExportTuitionExcel = () => {
+ const headers = [
+ 'معرف الطالب',
+ 'اسم الطالب',
+ 'الصف والدراسة',
+ 'القسط الأساسي ($ USD)',
+ 'الخصومات ($ USD)',
+ 'المصاريف الإدارية ($ USD)',
+ 'المبلغ المقبوض ($ USD)',
+ 'المتبقي المستحق ($ USD)',
+ 'اسم ولي الأمر',
+ 'هاتف ولي الأمر',
+ 'حالة القسط'
+ ];
+
+ const dataRows = safeStudents.map(s => {
+ const total = Number(s.tuitionTotal || 700);
+ const adminFees = Number(s.adminFees || 0);
+ const transportFee = s.hasTransport ? (Number(s.transportFee) || 0) : 0;
+ const discount = Number(s.tuitionDiscount || 0);
+ const paid = Number(s.tuitionPaid || 0);
+ const remaining = Math.max(0, total + adminFees + transportFee - discount - paid);
+ const status = remaining === 0 ? 'مسدد بالكامل' : 'يوجد قسط متبقي';
+ return [
+ s.id,
+ isAr ? s.name : s.nameEn,
+ `${isAr ? s.grade : s.gradeEn} (${s.classRoom})`,
+ total,
+ discount,
+ paid,
+ remaining,
+ s.parentName || 'غير مححدد',
+ s.parentPhone || 'غير محدد',
+ status
+ ];
+ });
+
+ exportToExcelCSV(`kashf-aqsat-${new Date().toISOString().slice(0,10)}.csv`, headers, dataRows);
+ };
+
+ const handleSendWhatsAppReceipt = (stuName, parentPhone, amountPaid, remainingUSD) => {
+ const msg = isAr
+ ? `مرحباً ولي أمر الطالب (${stuName}) \nنود إعلامكم باستلام دفعة مالية بقيمة $${amountPaid} USD من القسط المدرسي.\nالمتبقي المستحق: $${remainingUSD} USD.\nشكراً لتعاونكم مع مدرسة الدعم التعليمي.`
+ : `Dear parent of ${stuName}, we received tuition payment of $${amountPaid} USD. Remaining balance: $${remainingUSD} USD. Thank you!`;
+ 
+ openWhatsAppMessage(parentPhone || '+961 70 000 000', msg);
+ };
+
+ const formatReceiptStudentNames = (namesStr) => {
+ if (!namesStr) return '';
+ return String(namesStr)
+ .split('•')
+ .map(part => part.trim().split(' ')[0])
+ .filter(Boolean)
+ .join(' • ');
+ };
+
+ return (
+ <div className="space-y-6 animate-fade-in text-[#0F172A]">
+
+ {/* Title Banner */}
+ <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white border border-[#E2E8F0] p-6 rounded-3xl shadow-sm text-[#0F172A]">
+ <div className="flex items-center gap-3">
+ <div className="p-3 bg-[#0284C7]/10 text-[#0284C7] rounded-2xl">
+ <DollarSign className="w-6 h-6" />
+ </div>
+ <div>
+ <h2 className="text-xl font-bold text-[#0284C7]">{t('tuitionTitle')}</h2>
+ <p className="text-xs text-slate-500 mt-1">
+ {isAr 
+ ? "إدخال الدفعات وسداد الأقساط بالدولار مع الخصم المباشر والإصدار الآلي للإيصالات الرسمية."
+ : "Record student tuition payments with instant balance deduction & official receipt generation."}
+ </p>
+ </div>
+ </div>
+
+ {/* Financial Metrics + Exchange Rate Banner */}
+ {currentRole === 'admin' && (
+ <div className="flex flex-wrap items-center gap-3">
+ <button
+ onClick={() => setShowPrintStatementModal(true)}
+ className="px-4 py-2 bg-[#0284C7] hover:bg-[#0369A1] text-white rounded-2xl text-xs font-bold shadow flex items-center gap-1.5 cursor-pointer transition-all"
+ title="معاينة وطباعة جدول كشف الأقساط المالية للطلاب"
+ >
+ <Printer className="w-4 h-4" />
+ <span>طباعة كشف الأقساط (جدول) </span>
+ </button>
+
+ <button
+ onClick={handleExportTuitionExcel}
+ className="btn-mustard px-4 py-2 rounded-2xl text-xs font-bold shadow flex items-center gap-1.5 cursor-pointer transition-all"
+ title="تصدير جدول كافة الأقساط كملف اكسل"
+ >
+ <span>تصدير كشف الأقساط Excel </span>
+ </button>
+
+ <div className="flex flex-col items-end gap-1">
+ <div className="flex items-center gap-3 bg-[#F8FAFC] border border-[#E2E8F0] px-4 py-2 rounded-2xl">
+ <div className="text-right">
+ <span className="text-[11px] text-slate-500 block">{t('remainingAmount')} الإجمالي</span>
+ <span className="text-sm font-extrabold text-[#0284C7] font-mono">${totalRemainingUSD.toLocaleString()} USD</span>
+ </div>
+ </div>
+ </div>
+ </div>
+ )}
+ </div>
+
+ {/* Success Notification Toast */}
+ {successToast && (
+ <div className="bg-emerald-50 border border-emerald-300 text-emerald-800 p-4 rounded-2xl flex items-center gap-3 shadow-lg animate-fade-in text-xs font-semibold">
+ <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
+ <span>{t('paymentSuccess')} — تم خصم الدفعة من المتبقي فوراً!</span>
+ </div>
+ )}
+
+ {/* Student View: Current Student Tuition Card */}
+ {(currentRole === 'student' || currentRole === 'parent') && currentStudent && (
+ <div className="bg-white border border-[#E2E8F0] p-6 rounded-3xl space-y-6 shadow-sm text-[#0F172A] relative">
+ <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+ <div>
+ <h3 className="text-lg font-bold text-[#0284C7]">
+ {isAr ? currentStudent.name : currentStudent.nameEn}
+ </h3>
+ <p className="text-xs text-slate-500">
+ {isAr ? currentStudent.grade : currentStudent.gradeEn} | ID: {currentStudent.id}
+ </p>
+ </div>
+
+ <div className="flex items-center gap-2">
+ {currentRole !== 'student' && (
+ <button
+ onClick={() => {
+ const transportFee = currentStudent.hasTransport ? (Number(currentStudent.transportFee) || 0) : 0;
+ const receipt = {
+ receiptNo: `REC-LB-${Date.now().toString().slice(-6)}`,
+ date: new Date().toISOString().split('T')[0],
+ studentName: isAr ? currentStudent.name : currentStudent.nameEn,
+ grade: isAr ? currentStudent.grade : currentStudent.gradeEn,
+ amountUSD: currentStudent.tuitionPaid,
+ amountLBP: 0,
+ method: 'fresh_cash',
+ remainingUSD: Math.max(0, (currentStudent.tuitionTotal || 700) + (currentStudent.adminFees || 0) + transportFee - (currentStudent.tuitionDiscount || 0) - (currentStudent.tuitionPaid || 0))
+ };
+ setShowReceiptModal(receipt);
+ }}
+ className="px-4 py-2.5 bg-sky-50 hover:bg-sky-100 text-[#0284C7] border border-sky-200 rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+ >
+ <Printer className="w-4 h-4 text-[#0284C7]" />
+ <span>طباعة الإيصال </span>
+ </button>
+ )}
+
+ <button
+ onClick={() => setSelectedStudentForPay(currentStudent)}
+ className="btn-mustard flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold shadow transition-all cursor-pointer"
+ >
+ <DollarSign className="w-4 h-4" />
+ <span>تسديد دفعة مالية </span>
+ </button>
+ </div>
+ </div>
+
+ <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-6 gap-4">
+ <div className="bg-[#F8FAFC] p-4 rounded-2xl border border-[#E2E8F0]">
+ <span className="text-xs text-slate-500 block">{t('totalTuition')}</span>
+ <span className="text-xl font-black text-[#0F172A] mt-1 block font-mono">${(currentStudent.tuitionTotal || 700).toLocaleString()} USD</span>
+ </div>
+ <div className="bg-[#F8FAFC] p-4 rounded-2xl border border-[#E2E8F0]">
+ <span className="text-xs text-slate-500 block">{isAr ? 'رسوم النقل' : 'Bus Fee'}</span>
+ <span className="text-xl font-black text-sky-600 mt-1 block font-mono">${(currentStudent.hasTransport ? (Number(currentStudent.transportFee) || 0) : 0).toLocaleString()} USD</span>
+ </div>
+ <div className="bg-[#F8FAFC] p-4 rounded-2xl border border-[#E2E8F0]">
+ <span className="text-xs text-slate-500 block">{isAr ? 'المصاريف الإدارية' : 'Admin Fees'}</span>
+ <span className="text-xl font-black text-amber-600 mt-1 block font-mono">+${(currentStudent.adminFees || 0).toLocaleString()} USD</span>
+ </div>
+ <div className="bg-[#F8FAFC] p-4 rounded-2xl border border-[#E2E8F0]">
+ <span className="text-xs text-slate-500 block">{isAr ? 'الخصومات والمنح' : 'Discounts'}</span>
+ <span className="text-xl font-black text-emerald-600 mt-1 block font-mono">-${(currentStudent.tuitionDiscount || 0).toLocaleString()} USD</span>
+ </div>
+ <div className="bg-[#F8FAFC] p-4 rounded-2xl border border-[#E2E8F0]">
+ <span className="text-xs text-slate-500 block">{t('paidAmount')}</span>
+ <span className="text-xl font-black text-[#0284C7] mt-1 block font-mono">${(currentStudent.tuitionPaid || 0).toLocaleString()} USD</span>
+ </div>
+ <div className="bg-[#F8FAFC] p-4 rounded-2xl border border-red-300">
+ <span className="text-xs text-red-600 block font-bold">{t('remainingAmount')}</span>
+ <span className="text-xl font-black text-red-600 mt-1 block font-mono">${Math.max(0, (currentStudent.tuitionTotal || 700) + (currentStudent.adminFees || 0) + (currentStudent.hasTransport ? (Number(currentStudent.transportFee) || 0) : 0) - (currentStudent.tuitionDiscount || 0) - (currentStudent.tuitionPaid || 0)).toLocaleString()} USD</span>
+ </div>
+ </div>
+ </div>
+ )}
+
+ {/* Admin View: All Students Tuition Roster Grid */}
+ {currentRole === 'admin' && (
+ <div className="space-y-6">
+ {/* Overdue Tuition Warning Block (Visible after the 5th of the month for unpaid accounts) */}
+ {isOverduePeriod && (() => {
+ const globalOverduePhones = new Set();
+ const overdueCards = safeStudents.map((primaryStu) => {
+ const phoneKey = (primaryStu.parentPhone || primaryStu.phone || primaryStu.id).trim();
+ if (globalOverduePhones.has(phoneKey)) return null;
+ globalOverduePhones.add(phoneKey);
+
+ // Find ALL family members registered under this parent phone
+ const familyMembers = safeStudents.filter(s => {
+ if (!s.parentPhone && !primaryStu.parentPhone) return s.id === primaryStu.id;
+ return s.parentPhone && s.parentPhone.trim() === phoneKey;
+ });
+
+ // Active (non-frozen) family members
+ const activeFamilyMembers = familyMembers.filter(s => !s.frozen);
+ if (activeFamilyMembers.length === 0) return null;
+
+ // Calculate combined remaining overdue dues
+ const totalUSD = activeFamilyMembers.reduce((sum, s) => sum + (Number(s.tuitionTotal) || 700) + (s.hasTransport ? (Number(s.transportFee) || 0) : 0), 0);
+ const adminUSD = activeFamilyMembers.reduce((sum, s) => sum + (Number(s.adminFees) || 0), 0);
+ const discountUSD = activeFamilyMembers.reduce((sum, s) => sum + (Number(s.tuitionDiscount) || 0), 0);
+ const paidUSD = activeFamilyMembers.reduce((sum, s) => sum + (Number(s.tuitionPaid) || 0), 0);
+ const remUSD = Math.max(0, Math.round((totalUSD + adminUSD - discountUSD - paidUSD) * 100) / 100);
+
+ // Check if active family members have paid ANY installment in the current month (e.g. "2026-08")
+ const currentYearMonth = new Date().toISOString().slice(0, 7);
+ const activeFamilyHistory = activeFamilyMembers.reduce((acc, s) => {
+ const sHist = paymentHistory[s.id] || [];
+ return [...acc, ...sHist];
+ }, []);
+
+ const hasPaidThisMonth = activeFamilyHistory.some(entry => entry.date && entry.date.startsWith(currentYearMonth));
+
+ // Hide from overdue list if fully paid OR if a payment/installment was already submitted in the current month!
+ if (remUSD <= 0.01 || hasPaidThisMonth) return null;
+
+ const isMulti = familyMembers.length > 1;
+ const familyName = primaryStu.parentName || `عائلة ${primaryStu.name.split(' ').slice(-1)[0]}`;
+ const isReminderSent = Boolean(sentReminders[phoneKey]);
+ const sentTime = sentReminders[phoneKey];
+
+ return (
+ <div 
+ key={primaryStu.id} 
+ className={`p-3 rounded-2xl flex items-center justify-between shadow-xs transition-all border ${
+ isReminderSent 
+ ? 'bg-emerald-50 border-emerald-300 dark:bg-emerald-950/40 dark:border-emerald-700 ring-1 ring-emerald-400/30' 
+ : 'bg-white dark:bg-slate-900 border-red-200 dark:border-red-950/50'
+ }`}
+ >
+ <div className="flex items-center gap-2 min-w-0">
+ <div className={`w-9 h-9 rounded-2xl font-black text-xs flex items-center justify-center shrink-0 border shadow-xs ${
+ isReminderSent
+ ? 'bg-emerald-500 text-white border-emerald-600'
+ : isMulti ? 'bg-amber-500 text-white border-amber-600' : 'bg-red-100 text-red-700 border-red-300'
+ }`}>
+ {isReminderSent ? '' : isMulti ? '' : (primaryStu.name || 'ط')[0]}
+ </div>
+ <div className="truncate">
+ <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate flex items-center gap-1">
+ <span>{isMulti ? familyName : (isAr ? primaryStu.name : primaryStu.nameEn)}</span>
+ </h4>
+ <div className="flex items-center gap-1 flex-wrap">
+ <span className="text-[10px] text-red-500 font-extrabold font-mono block">
+ ${remUSD} USD {isMulti ? `(${familyMembers.length} إخوة)` : ''}
+ </span>
+ {isReminderSent && (
+ <span className="text-[9px] text-emerald-700 font-black bg-emerald-100 px-1.5 py-0.2 rounded-full border border-emerald-300 animate-fade-in">
+ تم التذكير ({sentTime}) </span>
+ )}
+ </div>
+ </div>
+ </div>
+
+ <button
+ onClick={() => handleSendWhatsAppReminder(primaryStu)}
+ className={`py-1.5 px-2.5 rounded-xl text-[10px] font-extrabold flex items-center gap-1 shrink-0 cursor-pointer transition-all border ${
+ isReminderSent 
+ ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 shadow-xs' 
+ : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-300'
+ }`}
+ title={isReminderSent ? `تم إرسال تذكير في ${sentTime} (اضغط لإعادة الإرسال)` : 'إرسال تذكير مالي بالواتساب للعائلة'}
+ >
+ <span>{isReminderSent ? 'تم التذكير ' : 'تذكير '}</span>
+ </button>
+ </div>
+ );
+ }).filter(Boolean);
+
+ if (overdueCards.length === 0) return null; // Entire overdue block hides when no overdue families exist!
+
+ return (
+ <div className="bg-red-50 dark:bg-red-950/20 border-2 border-red-200 dark:border-red-800/40 p-5 rounded-3xl space-y-4">
+ <div className="flex items-center gap-2 text-red-800 dark:text-red-400">
+ <span className="text-xl"></span>
+ <div>
+ <h3 className="text-sm font-black">{isAr ? `قائمة الذمم والأقساط المتأخرة المستحقة (${overdueCards.length})` : `Overdue Tuition Dues List (${overdueCards.length})`}</h3>
+ <p className="text-[10px] text-slate-500 font-bold">{isAr ? 'تظهر هذه القائمة تلقائياً لوجود مستحقات مالية غير مسددة بعد تاريخ 5 من الشهر الجاري.' : 'List of students with remaining tuition due after the 5th of this month.'}</p>
+ </div>
+ </div>
+
+ <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+ {overdueCards}
+ </div>
+ </div>
+ );
+ })()}
+
+ <div className="bg-white border border-[#E2E8F0] p-6 rounded-3xl space-y-4 shadow-sm text-[#0F172A]">
+ <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+ <h3 className="text-base font-bold text-[#0284C7]">
+ {isAr ? 'كشف كافة أقساط الطلاب والدفعات المباشرة' : 'Student Tuition Roster & Direct Payments'}
+ </h3>
+
+ {/* Financial Search Bar */}
+ <div className="relative w-full sm:w-72">
+ <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
+ <input
+ type="text"
+ value={tuitionSearchQuery}
+ onChange={(e) => setTuitionSearchQuery(e.target.value)}
+ placeholder={isAr ? "بحث باسم الطالب، ولي الأمر، الصف، أو الهاتف..." : "Search student, parent, grade, or phone..."}
+ className="w-full pr-9 pl-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#0284C7] focus:ring-1 focus:ring-[#0284C7] transition-all"
+ />
+ {tuitionSearchQuery && (
+ <button
+ type="button"
+ onClick={() => setTuitionSearchQuery('')}
+ className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+ >
+ <X className="w-3.5 h-3.5" />
+ </button>
+ )}
+ </div>
+ </div>
+
+ {filteredStudents.length === 0 && (
+ <div className="text-center py-10 text-slate-400">
+ <Search className="w-10 h-10 mx-auto mb-2 opacity-30" />
+ <p className="text-sm">{isAr ? `لا توجد نتائج بحث مطابقة لـ "${tuitionSearchQuery}"` : `No tuition records found for "${tuitionSearchQuery}"`}</p>
+ </div>
+ )}
+
+ <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 items-stretch">
+  {(() => {
+    const globalRenderedFamilyKeys = new Set();
+
+    return filteredStudents.map((primaryStu) => {
+      const familyKey = getFamilyKey(primaryStu);
+
+      if (globalRenderedFamilyKeys.has(familyKey)) return null;
+      globalRenderedFamilyKeys.add(familyKey);
+
+      // Find ALL family members registered under this parent phone or parent name
+      const familyMembers = safeStudents.filter(s => getFamilyKey(s) === familyKey);
+
+      const isMultiSiblingFamily = familyMembers.length > 1;
+
+      // Active (non-frozen) family members for active dues calculations
+      const activeFamilyMembers = familyMembers.filter(s => !s.frozen);
+
+      // Check if any sibling in the family is a special case
+      const isFamilySpecialCase = familyMembers.some(s => s.isSpecialCase);
+
+      // Calculate Combined Financial Totals ONLY for active (non-frozen) family members
+      const totalUSD = activeFamilyMembers.reduce((sum, s) => {
+        if (s.isSpecialCase || isFamilySpecialCase) return sum;
+        const trans = s.hasTransport ? (Number(s.transportFee) || 0) : 0;
+        return sum + (Number(s.tuitionTotal) || 0) + trans;
+      }, 0);
+
+      const adminUSD = activeFamilyMembers.reduce((sum, s) => {
+        if (s.isSpecialCase || isFamilySpecialCase) return sum;
+        return sum + (Number(s.adminFees) || 0);
+      }, 0);
+      const discountUSD = activeFamilyMembers.reduce((sum, s) => {
+        if (s.isSpecialCase || isFamilySpecialCase) return sum;
+        return sum + (Number(s.tuitionDiscount) || 0);
+      }, 0);
+      const paidUSD = activeFamilyMembers.reduce((sum, s) => sum + (Number(s.tuitionPaid) || 0), 0);
+      const remUSD = (isFamilySpecialCase || primaryStu.isSpecialCase) ? 0 : Math.max(0, totalUSD + adminUSD - discountUSD - paidUSD);
+
+      const parentDisplayName = (primaryStu.parentName && primaryStu.parentName.trim() !== '' && primaryStu.parentName !== 'غير محدد')
+        ? primaryStu.parentName
+        : `عائلة ${primaryStu.name.split(' ').slice(-1)[0]}`;
+      const parentPhone = primaryStu.parentPhone || primaryStu.phone || 'غير مسجل';
+      const phoneKey = (primaryStu.parentPhone || primaryStu.phone || primaryStu.id || '').toString().trim();
+
+      // Consolidated Payment History Log across all family members
+      const history = familyMembers.reduce((acc, s) => {
+        const sHist = paymentHistory[s.id] || [];
+        return [...acc, ...sHist];
+      }, []);
+
+      return (
+        <div 
+          key={primaryStu.id} 
+          className={`bg-[#F8FAFC] border-2 p-4.5 rounded-3xl shadow-xs transition-all relative flex flex-col justify-between hover:shadow-md ${
+            isMultiSiblingFamily 
+              ? 'border-amber-400/80 bg-gradient-to-b from-amber-50/20 via-white to-white ring-1 ring-amber-400/20' 
+              : 'border-[#E2E8F0] hover:border-[#0284C7]/50'
+          }`}
+        >
+          {/* Family / Student Header */}
+          <div className="space-y-3 shrink-0">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-200 pb-2.5">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className={`w-9 h-9 rounded-2xl font-black text-xs flex items-center justify-center shrink-0 shadow-xs ${
+                  isMultiSiblingFamily ? 'bg-amber-500 text-white' : 'bg-[#0284C7] text-white'
+                }`}>
+                  👨‍👩‍👧‍👦
+                </div>
+                <div className="truncate">
+                  <h4 className="text-xs font-black text-[#0F172A] truncate flex items-center gap-1.5">
+                    <span>{parentDisplayName}</span>
+                    {(primaryStu.isSpecialCase || isFamilySpecialCase) && (
+                      <span className="text-amber-500 font-bold text-sm inline-flex items-center gap-1" title="حالة خاصة">⭐</span>
+                    )}
+                  </h4>
+                  <span className="text-[10px] text-slate-500 font-mono block">
+                    {parentPhone}
+                  </span>
+                </div>
+              </div>
+
+              {/* Distinct Visual Badge */}
+              <span className={`px-2 py-0.5 rounded-full text-[9px] font-black shrink-0 border ${
+                (primaryStu.isSpecialCase || isFamilySpecialCase)
+                  ? 'bg-amber-100 text-amber-800 border-amber-300'
+                  : isMultiSiblingFamily 
+                    ? 'bg-amber-100 text-amber-800 border-amber-300' 
+                    : remUSD === 0 
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-300' 
+                      : 'bg-red-50 text-red-700 border-red-300'
+              }`}>
+                {(primaryStu.isSpecialCase || isFamilySpecialCase) 
+                  ? '⭐ حالة خاصة ($0)' 
+                  : isMultiSiblingFamily 
+                    ? `عائلة (${familyMembers.length} أبناء)` 
+                    : remUSD === 0 
+                      ? (isAr ? ' مسدد' : ' Paid') 
+                      : `$${remUSD} USD`}
+              </span>
+            </div>
+
+            {/* Financial Figures Box */}
+            <div className="text-xs space-y-1 bg-white p-3 rounded-2xl border border-slate-200 font-mono text-right shadow-2xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500 font-sans">{isMultiSiblingFamily ? 'إجمالي أقساط العائلة:' : t('totalTuition')}:</span>
+                <span className="font-bold text-[#0F172A]">${totalUSD} USD</span>
+              </div>
+              {adminUSD > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-sans">{isAr ? 'المصاريف الإدارية:' : 'Admin Fees:'}</span>
+                  <span className="font-bold text-amber-600">+${adminUSD} USD</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-slate-500 font-sans">{isAr ? 'الخصومات الممنوحة:' : 'Discount:'}</span>
+                <span className="font-bold text-emerald-600">-${discountUSD} USD</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500 font-sans">{t('paidAmount')}:</span>
+                <span className="font-extrabold text-[#0284C7]">${paidUSD} USD</span>
+              </div>
+              <div className="flex justify-between border-t border-slate-200 pt-1.5">
+                <span className="text-red-500 font-sans font-bold">{t('remainingAmount')}:</span>
+                <span className="font-black text-red-600 text-sm">
+                  {(isFamilySpecialCase || primaryStu.isSpecialCase) ? '⭐ حالة خاصة ($0)' : `$${remUSD} USD`}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Sibling / Children Breakdown with Separated Grade and Classroom */}
+          <div className="space-y-1.5 my-2.5 max-h-44 overflow-y-auto pr-1 custom-scrollbar">
+            <span className="text-[10px] font-black text-slate-500 block">
+              {isMultiSiblingFamily ? `أبناء / طلاب العائلة (${familyMembers.length}):` : 'الطالب المسجل:'}
+            </span>
+            {familyMembers.map((sib) => {
+              const sIsSpecial = sib.isSpecialCase || isFamilySpecialCase;
+              const sTot = sIsSpecial ? 0 : (Number(sib.tuitionTotal) || 0);
+              const sDis = sIsSpecial ? 0 : (Number(sib.tuitionDiscount) || 0);
+              const sPaid = Number(sib.tuitionPaid) || 0;
+              const sRem = sIsSpecial ? 0 : Math.max(0, sTot - sDis - sPaid);
+              return (
+                <div key={sib.id} className="bg-white border border-slate-200 p-2.5 rounded-2xl text-[10px] space-y-1.5 shadow-2xs">
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="font-extrabold text-[#0F172A] flex items-center gap-1.5">
+                      <span>{sib.name}</span>
+                      {sIsSpecial && <span className="text-amber-500 font-bold text-xs" title="حالة خاصة">⭐</span>}
+                    </span>
+
+                    <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold shrink-0 ${
+                      sIsSpecial ? 'bg-amber-100 text-amber-800 border border-amber-300' : sib.frozen ? 'bg-cyan-100 text-cyan-800 border border-cyan-300' : sRem === 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
+                    }`}>
+                      {sIsSpecial ? '⭐ حالة خاصة ($0)' : sib.frozen ? 'مجمد' : sRem === 0 ? ' مسدد' : `$${sRem}`}
+                    </span>
+                  </div>
+
+                  {/* Separated Grade and Classroom Badges */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="px-2 py-0.5 bg-sky-50 text-[#0284C7] border border-sky-200 rounded-md font-bold text-[9px]">
+                      📚 {sib.grade || 'غير محدد'}
+                    </span>
+                    <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md font-bold text-[9px]">
+                      🏫 الشعبة: ({sib.classRoom || 'أ'})
+                    </span>
+                  </div>
+
+                  <div className="text-[9px] text-slate-500 font-mono pt-0.5 border-t border-slate-100 flex justify-between">
+                    <span>{sIsSpecial ? 'حالة خاصة (غير خاضع للقسط)' : `مدفوع: $${sPaid}`}</span>
+                    <span>{sIsSpecial ? 'متبقي: $0' : `متبقي: $${sRem}`}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+ {/* Payment History Log */}
+ {history.length > 0 && (
+ <div className="bg-white border border-slate-200 rounded-xl p-2.5 space-y-1.5 max-h-28 overflow-y-auto my-2">
+ <p className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1">
+ <CheckCircle2 className="w-3 h-3 text-emerald-600" /> سجل الدفعات المسددة ({history.length})
+ </p>
+ {history.map((entry) => (
+ <div key={entry.id} className="flex items-center justify-between text-[10px] px-2 py-1.5 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-100">
+ <div>
+ <span className="font-bold block">{entry.desc} — ${entry.amount} USD</span>
+ <span className="text-[9px] text-emerald-600">{entry.date} • {entry.method === 'fresh_cash' ? 'نقداً' : 'تحويل'}</span>
+ </div>
+ <button onClick={() => handleDeleteHistoryEntry(primaryStu.id, entry.id, entry.amount)}
+ className="text-emerald-400 hover:text-red-600 transition-colors cursor-pointer"
+ title="حذف القيد">
+ <X className="w-3 h-3" />
+ </button>
+ </div>
+ ))}
+ </div>
+ )}
+
+ {/* Action Buttons */}
+ <div className="flex items-center justify-between pt-2 border-t border-slate-200 gap-1.5 flex-wrap shrink-0">
+ <button onClick={() => {
+ const allStudentNames = familyMembers.map(s => isAr ? s.name : (s.nameEn || s.name)).join(' • ');
+ handleSendWhatsAppReceipt(allStudentNames, parentPhone, paidUSD, remUSD);
+ }}
+ className="py-1.5 px-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 rounded-xl text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-all"
+ title="إرسال إشعار استلام مالي بالواتساب لولي الأمر">
+ <span>واتساب إيصال </span>
+ </button>
+
+ <button onClick={() => handleSendWhatsAppReminder(primaryStu)}
+ className={`py-1.5 px-2 rounded-xl text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-all border ${
+ sentReminders[phoneKey]
+ ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 shadow-xs'
+ : 'bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200'
+ }`}
+ title={sentReminders[phoneKey] ? `تم التذكير في ${sentReminders[phoneKey]} (اضغط لإعادة الإرسال)` : 'إرسال رسالة تذكير مالي بالواتساب لولي الأمر'}>
+ <span>{sentReminders[phoneKey] ? 'تم التذكير ' : 'واتساب تذكير '}</span>
+ </button>
+
+ <button onClick={() => {
+ const allStudentNames = familyMembers.map(s => isAr ? s.name : (s.nameEn || s.name)).join(' • ');
+ const receipt = {
+ receiptNo: `REC-LB-${Date.now().toString().slice(-6)}`,
+ date: new Date().toISOString().split('T')[0],
+ parentName: familyName,
+ studentName: allStudentNames,
+ grade: isMultiSiblingFamily ? `عائلة (${familyMembers.length} إخوة)` : (isAr ? primaryStu.grade : primaryStu.gradeEn),
+ amountUSD: paidUSD,
+ amountLBP: 0,
+ method: 'fresh_cash',
+ remainingUSD: remUSD
+ };
+ setShowReceiptModal(receipt);
+ }}
+ className="py-1.5 px-2.5 bg-sky-50 hover:bg-sky-100 text-[#0284C7] border border-sky-200 rounded-xl text-[11px] font-bold flex items-center gap-1 cursor-pointer shadow-sm">
+ <Printer className="w-3.5 h-3.5 text-[#0284C7]" />
+ <span>الإيصال </span>
+ </button>
+
+  <button onClick={() => {
+    setSelectedStudentForEditPaid(primaryStu);
+    setEditPaidAmountInput(primaryStu.tuitionPaid?.toString() || '0');
+    setEditPaidReasonInput('تعديل القسط المدفوع من قبل الإدارة');
+  }}
+  className="py-1.5 px-2.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-xl text-[11px] font-extrabold flex items-center gap-1 cursor-pointer transition-all shadow-xs"
+  title="تعديل القسط المدفوع إدارياً">
+  <Edit3 className="w-3.5 h-3.5 text-amber-700" />
+  <span>تعديل المدفوع </span>
+  </button>
+
+  <button onClick={() => setSelectedStudentForPay(primaryStu)}
+  className="btn-mustard py-1.5 px-3 rounded-xl text-[11px] font-bold flex items-center gap-1.5 cursor-pointer shadow">
+  <DollarSign className="w-3.5 h-3.5" />
+  <span>إدخال دفعة </span>
+  </button>
+  </div>
+  </div>
+  );
+  }).filter(Boolean);
+  })()}
+  </div>
+  </div>
+  </div>
+  )}
+
+  {/* ── Direct Payment Modal (Immediate Deduction) ─────────────────────────── */}
+  {selectedStudentForPay && createPortal(
+  <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[99999] flex items-center justify-center p-4 overflow-y-auto">
+  <form onSubmit={handleDirectPaySubmit}
+  className="bg-white border-2 border-[#0284C7] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl animate-scale-up text-[#0F172A] relative my-auto">
+  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+  <h3 className="text-base font-bold text-[#0284C7] flex items-center gap-2">
+  <CreditCard className="w-5 h-5 text-[#0284C7]" />
+  <span>إدخال دفعة وتسديد مباشر — {isAr ? selectedStudentForPay.name : selectedStudentForPay.nameEn}</span>
+  </h3>
+  <button type="button" onClick={() => setSelectedStudentForPay(null)}
+  className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs cursor-pointer">✕</button>
+  </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">المبلغ المدفوع ($ USD) <span className="text-red-500">*</span></label>
+ <input type="number" required min="1"
+ value={payAmount} onChange={(e) => setPayAmount(e.target.value)}
+ placeholder="مثال: 100 أو 200..."
+ className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-[#0284C7]" />
+ {payAmount && (
+ <span className="text-[10px] text-[#0284C7] font-mono font-bold block pt-0.5">
+ سيتم الخصم مباشرة من المبلغ المتبقي المستحق!
+ </span>
+ )}
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">بيان / وصف الدفعة</label>
+ <input type="text" value={payDesc} onChange={(e) => setPayDesc(e.target.value)}
+ placeholder="مثال: الدفعة الأولى - قسط شهر 7..."
+ className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-[#0284C7]" />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{t('paymentMethod')}</label>
+ <select value={payMethod} onChange={(e) => setPayMethod(e.target.value)}
+ className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs focus:outline-none cursor-pointer font-bold">
+ <option value="fresh_cash"> Fresh Cash USD (نقداً بالمدرسة)</option>
+ <option value="omt">OMT / Whish Money (تحويل مالي)</option>
+ </select>
+ </div>
+
+ {/* ── Admin Authorization Section ── */}
+ {isAdminLoggedIn ? (
+ <div className="flex items-center gap-2 text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl font-bold">
+ <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+ <span>الجلسة مفتوحة بحساب المدير — التعديل والدفع متاح تلقائياً</span>
+ </div>
+ ) : (
+ <div className="space-y-1.5 bg-amber-50/90 border border-amber-200 p-3 rounded-2xl">
+ <label className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+ <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+ <span>تأكيد صلاحية المدير (كلمة سر المدير) <span className="text-red-500">*</span></span>
+ </label>
+ <p className="text-[10px] text-amber-800 leading-relaxed">
+ إدخال وتعديل الدفعات المالية مجاز حصراً للمدير. أدخل كلمة سر المدير للتأكيد:
+ </p>
+ <div className="relative">
+ <Lock className="w-3.5 h-3.5 text-amber-500 absolute right-3 top-2.5" />
+ <input 
+ type="password" 
+ required
+ value={adminPassInput} 
+ onChange={(e) => {
+ setAdminPassInput(e.target.value);
+ setAdminPassError('');
+ }}
+ placeholder="أدخل كلمة سر المدير..."
+ className="w-full bg-white border border-amber-300 text-slate-900 rounded-xl pr-8 pl-3 py-2 text-xs font-mono focus:outline-none focus:border-amber-500 font-bold"
+ />
+ </div>
+ {adminPassError && (
+ <span className="text-[10px] text-red-600 font-bold block pt-0.5">
+ {adminPassError}
+ </span>
+ )}
+ </div>
+ )}
+
+ <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+ <button type="button" onClick={() => setSelectedStudentForPay(null)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold cursor-pointer">{t('cancel')}</button>
+ <button 
+ type="button" 
+ onClick={handleDirectPaySubmit} 
+ className="btn-mustard px-5 py-2.5 rounded-xl text-xs font-bold shadow cursor-pointer flex items-center gap-1.5"
+ >
+ <Check className="w-4 h-4" /> تأكيد خصم الدفعة والإيصال </button>
+ </div>
+ </form>
+ </div>,
+ document.body
+ )}
+
+  {/* ── Edit Paid Tuition Modal (Admin Correction) ─────────────────────────── */}
+  {selectedStudentForEditPaid && createPortal(
+  <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[99999] flex items-center justify-center p-4 overflow-y-auto">
+  <form onSubmit={handleEditPaidSubmit}
+  className="bg-white border-2 border-amber-400 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl animate-scale-up text-[#0F172A] relative my-auto">
+  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+  <div className="flex items-center gap-2">
+  <div className="p-2 bg-amber-100 text-amber-800 rounded-xl">
+  <Edit3 className="w-5 h-5" />
+  </div>
+  <div>
+  <h3 className="text-sm font-black text-[#0F172A]">تعديل القسط المدفوع للمدرسة</h3>
+  <span className="text-[11px] font-bold text-amber-700 block">الطالب: {selectedStudentForEditPaid.name}</span>
+  </div>
+  </div>
+  <button type="button" onClick={() => { setSelectedStudentForEditPaid(null); setAdminPassInput(''); setAdminPassError(''); }}
+  className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs cursor-pointer">✕</button>
+  </div>
+
+  <div className="bg-amber-50 p-3 rounded-2xl border border-amber-200 space-y-1">
+  <div className="flex justify-between font-extrabold text-amber-900 text-xs">
+  <span>المبلغ المدفوع المسجل حالياً:</span>
+  <span className="font-mono text-sm">${selectedStudentForEditPaid.tuitionPaid || 0} USD</span>
+  </div>
+  <div className="flex justify-between text-slate-600 text-[11px]">
+  <span>القسط السنوي الكلي:</span>
+  <span className="font-mono">${selectedStudentForEditPaid.tuitionTotal || 0} USD</span>
+  </div>
+  </div>
+
+  <div className="space-y-1">
+  <label className="text-xs font-black text-slate-800 block">المبلغ المدفوع الجديد ($ USD) <span className="text-red-500">*</span></label>
+  <input
+  type="number"
+  min="0"
+  step="any"
+  required
+  value={editPaidAmountInput}
+  onChange={(e) => setEditPaidAmountInput(e.target.value)}
+  placeholder="أدخل المبلغ الجديد المدفوع بالدولار..."
+  className="w-full bg-[#F8FAFC] border-2 border-amber-300 text-[#0F172A] font-mono font-bold rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:border-amber-500"
+  />
+  </div>
+
+  <div className="space-y-1">
+  <label className="text-xs font-bold text-slate-700 block">ملاحظة أو سبب التعديل</label>
+  <input
+  type="text"
+  value={editPaidReasonInput}
+  onChange={(e) => setEditPaidReasonInput(e.target.value)}
+  className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs focus:outline-none"
+  />
+  </div>
+
+  {/* Admin Authorization Password (if not logged in as Admin) */}
+  {!isAdminLoggedIn && (
+  <div className="space-y-1.5 bg-amber-50/90 border border-amber-200 p-3 rounded-2xl">
+  <label className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+  <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+  <span>تأكيد صلاحية المدير (كلمة سر المدير) <span className="text-red-500">*</span></span>
+  </label>
+  <p className="text-[10px] text-amber-800 leading-relaxed">
+  تعديل الدفعات المالية مجاز حصراً للمدير. أدخل كلمة سر المدير للتأكيد:
+  </p>
+  <div className="relative">
+  <Lock className="w-3.5 h-3.5 text-amber-500 absolute right-3 top-2.5" />
+  <input 
+  type="password" 
+  required
+  value={adminPassInput} 
+  onChange={(e) => {
+  setAdminPassInput(e.target.value);
+  setAdminPassError('');
+  }}
+  placeholder="أدخل كلمة سر المدير..."
+  className="w-full bg-white border border-amber-300 text-slate-900 rounded-xl pr-8 pl-3 py-2 text-xs font-mono focus:outline-none focus:border-amber-500 font-bold"
+  />
+  </div>
+  {adminPassError && (
+  <span className="text-[10px] text-red-600 font-bold block pt-0.5">
+  {adminPassError}
+  </span>
+  )}
+  </div>
+  )}
+
+  <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+  <button type="button" onClick={() => { setSelectedStudentForEditPaid(null); setAdminPassInput(''); setAdminPassError(''); }} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold cursor-pointer">{t('cancel')}</button>
+  <button 
+  type="button" 
+  onClick={handleEditPaidSubmit} 
+  className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-black shadow cursor-pointer flex items-center gap-1.5"
+  >
+  <Check className="w-4 h-4" /> حفظ التعديل الآن </button>
+  </div>
+  </form>
+  </div>,
+  document.body
+  )}
+
+ {/* ── Receipt Modal (Guaranteed 1 Page Print) ─────────────────────────── */}
+ {showReceiptModal && createPortal(
+ <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[99999] flex items-start justify-center p-4 sm:p-6 overflow-y-auto receipt-print-backdrop">
+ <div className="receipt-printable-card bg-white text-slate-900 rounded-3xl p-5 sm:p-7 max-w-lg w-full space-y-4 shadow-2xl animate-scale-up relative border-0">
+ 
+ <style>{`
+ /* On Screen Styles: Force Solid White Card Preview */
+ @media screen {
+ .receipt-printable-card, html.dark .receipt-printable-card {
+ background-color: #ffffff !important;
+ background: #ffffff !important;
+ color: #0f172a !important;
+ border: none !important;
+ }
+
+ .receipt-details-box, html.dark .receipt-details-box {
+ background-color: #f8fafc !important;
+ background: #f8fafc !important;
+ border: 1px solid #cbd5e1 !important;
+ }
+
+ .receipt-details-box span {
+ color: #334155 !important;
+ }
+
+ .receipt-stamp-badge, html.dark .receipt-stamp-badge {
+ background-color: rgba(2, 132, 199, 0.08) !important;
+ color: #0284c7 !important;
+ border-color: rgba(2, 132, 199, 0.3) !important;
+ }
+ }
+
+ /* Clean Reset & Print-Only Styles (Starts at absolute top of paper) */
+ @media print {
+ @page {
+ size: portrait;
+ margin: 0mm !important;
+ }
+ @page :left { margin: 0mm !important; }
+ @page :right { margin: 0mm !important; }
+ @page :first { margin: 0mm !important; }
+
+ *, *::before, *::after {
+ animation: none !important;
+ transition: none !important;
+ box-shadow: none !important;
+ text-shadow: none !important;
+ }
+
+ html, body {
+ margin: 0 !important;
+ padding: 0 !important;
+ background: #ffffff !important;
+ background-color: #ffffff !important;
+ color: #000000 !important;
+ color-scheme: light !important;
+ -webkit-print-color-adjust: exact !important;
+ print-color-adjust: exact !important;
+ height: auto !important;
+ width: 100% !important;
+ }
+
+ body > #root {
+ display: none !important;
+ }
+
+ .receipt-print-backdrop {
+ all: unset !important;
+ display: block !important;
+ width: 100% !important;
+ margin: 0 !important;
+ padding: 0 !important;
+ background: #ffffff !important;
+ }
+
+ .receipt-printable-card {
+ all: unset !important;
+ display: block !important;
+ margin: 0 auto !important;
+ padding: 14px 18px !important;
+ width: 94% !important;
+ max-width: 480px !important;
+ border: none !important;
+ background: #ffffff !important;
+ color: #000000 !important;
+ box-sizing: border-box !important;
+ border-radius: 0px !important;
+ }
+
+ .receipt-details-box {
+ background: transparent !important;
+ background-color: transparent !important;
+ border: 1px solid #000000 !important;
+ }
+
+ /* Force absolute black text and transparent background on all inner elements */
+ .receipt-printable-card div,
+ .receipt-printable-card span,
+ .receipt-printable-card p,
+ .receipt-printable-card h3,
+ .receipt-printable-card img {
+ color: #000000 !important;
+ background: transparent !important;
+ background-color: transparent !important;
+ }
+ 
+ .receipt-printable-card div, .receipt-printable-card span {
+ border-color: #000000 !important;
+ }
+
+ .receipt-stamp-badge {
+ background: transparent !important;
+ background-color: transparent !important;
+ color: #000000 !important;
+ border-color: #000000 !important;
+ }
+
+ .no-print {
+ display: none !important;
+ }
+ }
+ `}</style>
+ 
+ <div className="flex items-center justify-between border-b-2 border-slate-200 pb-3">
+ <div className="flex items-center gap-3">
+ <div className="w-10 h-10 rounded-xl bg-white p-1 flex items-center justify-center border border-[#0284C7] shadow-sm overflow-hidden shrink-0">
+ <img src="/emblem.png" alt="Logo" className="w-full h-full object-cover rounded-lg" />
+ </div>
+ <div>
+ <h3 className="text-sm font-black text-[#0284C7] leading-tight">
+ {isAr ? (siteSettings?.schoolName || 'مدرسة الدعم التعليمي') : (siteSettings?.schoolNameEn || 'Educational Support School')}
+ </h3>
+ <span className="text-[10px] text-slate-500 font-bold block">إيصال استلام مالي رسمي • Official Payment Receipt</span>
+ </div>
+ </div>
+
+ <div className="flex items-center gap-2">
+ <button onClick={() => {
+ const bd = document.querySelector('.receipt-print-backdrop');
+ if (bd) bd.scrollTop = 0;
+ window.scrollTo(0, 0);
+ setTimeout(() => window.print(), 30);
+ }}
+ className="no-print bg-[#0284C7] hover:bg-[#0369A1] text-white px-3.5 py-1.5 rounded-xl text-xs font-bold shadow flex items-center gap-1.5 transition-all cursor-pointer">
+ <Printer className="w-3.5 h-3.5" /> طباعة </button>
+ <button onClick={() => setShowReceiptModal(null)}
+ className="no-print w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs transition-colors cursor-pointer"></button>
+ </div>
+ </div>
+
+ <div className="receipt-details-box p-4 rounded-2xl border border-[#E2E8F0] space-y-2.5 text-xs font-mono">
+ {[
+ [isAr ? 'رقم الإيصال:' : 'Receipt No:', showReceiptModal.receiptNo, 'text-[#0284C7]'],
+ [isAr ? 'تاريخ الاستلام:' : 'Payment Date:', showReceiptModal.date, 'text-slate-700'],
+ [isAr ? 'اسم ولي الأمر:' : 'Parent Name:', showReceiptModal.parentName || '—', 'text-[#0F172A] text-xs font-bold'],
+ [isAr ? 'اسم الطالب / الإخوة:' : 'Student / Siblings:', formatReceiptStudentNames(showReceiptModal.studentName), 'text-[#0284C7] text-sm font-black'],
+ [isAr ? 'الصف / الشعبة:' : 'Grade:', showReceiptModal.grade, 'text-slate-700'],
+ [isAr ? 'طريقة الدفع:' : 'Payment Method:', showReceiptModal.method === 'fresh_cash' ? 'Fresh Cash USD' : 'OMT / Whish Transfer', 'text-slate-800'],
+ showReceiptModal.totalDuesUSD !== undefined ? [isAr ? (showReceiptModal.isMultiSib ? 'إجمالي قسط الإخوة:' : 'إجمالي القسط المستحق:') : 'Total Dues:', `$${showReceiptModal.totalDuesUSD.toLocaleString()} USD`, 'text-slate-800 font-bold'] : null,
+ [isAr ? 'المبلغ المدفوع (هذا الإيصال):' : 'Paid (This Receipt):', `$${showReceiptModal.amountUSD.toLocaleString()} USD`, 'text-emerald-600 text-sm font-black'],
+ [isAr ? (showReceiptModal.isMultiSib ? 'إجمالي المتبقي (جميع الإخوة):' : 'القسط المتبقي:') : 'Remaining Balance:', `$${showReceiptModal.remainingUSD.toLocaleString()} USD`, 'text-red-600 font-black'],
+ ].filter(Boolean).map(([label, val, cls], i) => (
+ <div key={i} className="flex justify-between border-b border-slate-100 pb-1.5 last:border-0 last:pb-0">
+ <span className="text-slate-500">{label}</span>
+ <span className={`font-bold ${cls}`}>{val}</span>
+ </div>
+ ))}
+ </div>
+
+ <div className="flex justify-between items-end pt-3 border-t border-slate-200 text-[11px] text-slate-500">
+ <div>
+ <p className="font-bold">{isAr ? 'توقيع المحاسب / الإدارة:' : 'Accountant Signature:'}</p>
+ <div className="h-7 border-b border-slate-300 w-32 mt-1" />
+ </div>
+ <span className="px-3 py-1 rounded-full receipt-stamp-badge font-black text-[10px] border border-[#0284C7]/20">
+ {isAr ? 'ختم المدرسة الرسمي ' : 'Official School Stamp'}
+ </span>
+ </div>
+
+ <div className="no-print flex justify-end gap-3 pt-2 border-t border-slate-100">
+ <button onClick={() => setShowReceiptModal(null)} className="btn-mustard px-5 py-2.5 rounded-xl text-xs font-bold shadow cursor-pointer">{t('close')}</button>
+ <button onClick={() => {
+ const bd = document.querySelector('.receipt-print-backdrop');
+ if (bd) bd.scrollTop = 0;
+ window.scrollTo(0, 0);
+ setTimeout(() => window.print(), 30);
+ }} className="px-5 py-2.5 bg-[#0284C7] hover:bg-[#0369A1] text-white rounded-xl text-xs font-bold cursor-pointer flex items-center gap-1.5 shadow-md transition-all">
+ <Printer className="w-4 h-4 text-white" /> طباعة الإيصال </button>
+ </div>
+ </div>
+ </div>,
+ document.body
+ )}
+
+ {/* Official Full Printable Tuition Roster Table Modal */}
+ {showPrintStatementModal && createPortal(
+ <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-[9999] overflow-y-auto receipt-print-backdrop">
+ <div className="bg-white rounded-3xl p-7 max-w-5xl w-full shadow-2xl space-y-6 border border-slate-200 receipt-printable-card text-[#0F172A] relative text-right">
+ 
+ {/* Executive Top-Aligned Print & Wide A4 Page CSS Rules */}
+ <style>{`
+ @page {
+ size: A4 portrait;
+ margin: 8mm 12mm 12mm 12mm;
+ }
+ @media print {
+ html, body {
+ background: #ffffff !important;
+ color: #000000 !important;
+ margin: 0 !important;
+ padding: 0 !important;
+ width: 100% !important;
+ height: auto !important;
+ display: block !important;
+ -webkit-print-color-adjust: exact !important;
+ print-color-adjust: exact !important;
+ }
+ body * {
+ visibility: hidden !important;
+ }
+ .receipt-printable-card,
+ .receipt-printable-card * {
+ visibility: visible !important;
+ }
+ .receipt-printable-card {
+ position: absolute !important;
+ left: 0 !important;
+ top: 0 !important;
+ width: 100% !important;
+ max-width: 100% !important;
+ margin: 0 !important;
+ padding: 0 !important;
+ border: none !important;
+ box-shadow: none !important;
+ background: #ffffff !important;
+ color: #000000 !important;
+ display: block !important;
+ }
+ .no-print {
+ display: none !important;
+ }
+ .statement-header-box {
+ border-bottom: 3px solid #0284C7 !important;
+ padding-bottom: 12px !important;
+ margin-bottom: 14px !important;
+ width: 100% !important;
+ }
+ .statement-print-table {
+ width: 100% !important;
+ border-collapse: collapse !important;
+ margin: 14px 0 !important;
+ }
+ .statement-print-table th {
+ background-color: #0284C7 !important;
+ color: #ffffff !important;
+ font-weight: 800 !important;
+ border: 1.5px solid #0369A1 !important;
+ padding: 12px 10px !important;
+ font-size: 12.5px !important;
+ text-align: center !important;
+ }
+ .statement-print-table td {
+ border: 1.5px solid #CBD5E1 !important;
+ padding: 11px 10px !important;
+ font-size: 12px !important;
+ text-align: center !important;
+ color: #0F172A !important;
+ line-height: 1.4 !important;
+ }
+ .statement-print-table tr:nth-child(even) td {
+ background-color: #F8FAFC !important;
+ }
+ .statement-print-table tfoot tr td {
+ background-color: #E2E8F0 !important;
+ font-weight: 800 !important;
+ font-size: 12.5px !important;
+ padding: 12px 10px !important;
+ border-top: 3px solid #0284C7 !important;
+ }
+ .statement-print-table tr.frozen-row td {
+ background-color: #FEE2E2 !important;
+ color: #991B1B !important;
+ font-weight: 800 !important;
+ border-color: #FCA5A5 !important;
+ }
+ .statement-print-table tr:nth-child(even).frozen-row td {
+ background-color: #FCA5A5 !important;
+ }
+ .statement-print-footer {
+ page-break-inside: avoid !important;
+ break-inside: avoid !important;
+ margin-top: 25px !important;
+ padding-top: 15px !important;
+ }
+ .signature-section {
+ margin-top: 20px !important;
+ padding-top: 18px !important;
+ border-top: 2px solid #CBD5E1 !important;
+ width: 100% !important;
+ }
+ }
+ `}</style>
+
+ {/* Top Controls Header (Screen Only) */}
+ <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-200 pb-4 no-print">
+ <div className="flex items-center gap-3">
+ <div className="p-3 bg-[#0284C7]/10 text-[#0284C7] rounded-2xl border border-sky-200">
+ <Printer className="w-6 h-6" />
+ </div>
+ <div>
+ <h3 className="text-lg font-black text-[#0284C7]">معاينة وطباعة كشف الأقساط والدفعات المدرسية (A4)</h3>
+ <p className="text-xs text-slate-500">جدول مالي مجمع بالدولار - المجموع والحسابات المجمدة والتواقيع مؤطرة بأسفل آخر صفحة</p>
+ </div>
+ </div>
+
+ <div className="flex items-center gap-2">
+ <button
+ onClick={() => {
+ window.scrollTo(0, 0);
+ setTimeout(() => window.print(), 50);
+ }}
+ className="px-5 py-2.5 bg-[#0284C7] hover:bg-[#0369A1] text-white rounded-xl text-xs font-black shadow-md flex items-center gap-2 cursor-pointer transition-all"
+ >
+ <Printer className="w-4 h-4" />
+ <span>طباعة الكشف (A4) </span>
+ </button>
+
+ <button
+ onClick={() => setShowPrintStatementModal(false)}
+ className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center font-black text-sm cursor-pointer transition-colors"
+ >
+ </button>
+ </div>
+ </div>
+
+ {/* Official Header Banner */}
+ <div className="statement-header-box flex items-center justify-between border-b-2 border-[#0284C7] pb-4">
+ <div className="flex items-center gap-4">
+ <div className="w-16 h-16 rounded-2xl bg-white p-1 flex items-center justify-center border-2 border-[#0284C7] shadow-xs overflow-hidden shrink-0">
+ <img src="/emblem.png" alt="School Emblem" className="w-full h-full object-contain" />
+ </div>
+ <div>
+ <h2 className="text-2xl font-black text-[#0284C7] leading-tight">
+ {siteSettings?.schoolName || 'مدرسة الدعم التعليمي'}
+ </h2>
+ <h3 className="text-sm font-extrabold text-slate-800 mt-1">
+ كشف الأقساط والتحصيلات المالية الموّحد للطلاب
+ </h3>
+ <span className="text-xs text-slate-500 font-semibold block">سجل الإدارة المالية والأقساط الدراسية الرسمي</span>
+ </div>
+ </div>
+
+ <div className="text-left font-mono text-xs text-slate-700 space-y-1.5 bg-[#F8FAFC] p-3.5 rounded-2xl border border-slate-200 min-w-56 shadow-2xs">
+ <div className="flex justify-between gap-3">
+ <span className="text-slate-500 font-sans font-bold">العام الدراسي:</span>
+ <span className="font-extrabold text-[#0284C7] text-sm">{siteSettings?.academicYear || '2026/2027'}</span>
+ </div>
+ <div className="flex justify-between gap-3">
+ <span className="text-slate-500 font-sans font-bold">تاريخ الإصدار:</span>
+ <span className="font-bold">{new Date().toISOString().split('T')[0]}</span>
+ </div>
+ <div className="flex justify-between gap-3 border-t border-slate-200 pt-1">
+ <span className="text-slate-500 font-sans font-bold">إجمالي الحسابات:</span>
+ <span className="font-black text-[#0F172A]">{safeStudents.length} طالب</span>
+ </div>
+ </div>
+ </div>
+
+ {/* Structured Roster Table Section */}
+ {(() => {
+ const frozenStudents = safeStudents.filter(s => Boolean(s.frozen));
+ const frozenCount = frozenStudents.length;
+ const frozenTuitionTotal = frozenStudents.reduce((sum, s) => sum + (Number(s.tuitionTotal) || 700), 0);
+ const frozenAdminFees = frozenStudents.reduce((sum, s) => sum + (Number(s.adminFees) || 0), 0);
+ const frozenDiscount = frozenStudents.reduce((sum, s) => sum + (Number(s.tuitionDiscount) || 0), 0);
+ const frozenPaid = frozenStudents.reduce((sum, s) => sum + (Number(s.tuitionPaid) || 0), 0);
+ const frozenRemaining = Math.max(0, frozenTuitionTotal + frozenAdminFees - frozenDiscount - frozenPaid);
+
+ return (
+ <>
+ <div className="overflow-x-auto my-2">
+ <table className="w-full text-center border-collapse statement-print-table">
+ <thead>
+ <tr>
+ <th style={{ width: '5%' }}>#</th>
+ <th style={{ width: '10%' }}>معرف ID</th>
+ <th style={{ width: '22%' }}>اسم الطالب / العائلة</th>
+ <th style={{ width: '14%' }}>الصف والشعبة</th>
+ <th style={{ width: '16%' }}>ولي الأمر والهاتف</th>
+ <th style={{ width: '7%' }}>القسط</th>
+ <th style={{ width: '7%' }}>مصاريف</th>
+ <th style={{ width: '6%' }}>الخصم</th>
+ <th style={{ width: '7%' }}>المقبوض</th>
+ <th style={{ width: '6%' }}>المتبقي</th>
+ </tr>
+ </thead>
+ <tbody>
+ {safeStudents.map((s, idx) => {
+ const isFrozen = Boolean(s.frozen);
+ const total = Number(s.tuitionTotal || 700);
+ const adminFees = Number(s.adminFees || 0);
+ const discount = Number(s.tuitionDiscount || 0);
+ const paid = Number(s.tuitionPaid || 0);
+ const rem = Math.max(0, total + adminFees - discount - paid);
+
+ return (
+ <tr key={s.id || idx} className={isFrozen ? 'bg-red-100 text-red-950 font-bold border-2 border-red-400 frozen-row' : ''}>
+ <td className={`font-mono ${isFrozen ? 'bg-red-100 text-red-950 font-extrabold border-red-300' : ''}`}>{idx + 1}</td>
+ <td className={`font-mono ${isFrozen ? 'bg-red-100 text-red-950 font-extrabold border-red-300' : 'text-slate-500'}`}>{s.id}</td>
+ <td className={`font-bold ${isFrozen ? 'bg-red-100 text-red-950 font-black border-red-300' : 'text-slate-900'}`}>
+ {isAr ? s.name : s.nameEn}
+ {isFrozen && <span className="mr-1 text-[10px] bg-red-600 text-white px-1.5 py-0.2 rounded-md font-black inline-block">مجمد</span>}
+ </td>
+ <td className={isFrozen ? 'bg-red-100 text-red-950 font-bold border-red-300' : 'text-slate-700'}>{isAr ? s.grade : s.gradeEn} ({s.classRoom || 'أ'})</td>
+ <td className={isFrozen ? 'bg-red-100 text-red-950 font-mono text-[10.5px] border-red-300' : 'text-slate-600 font-mono text-[10.5px]'}>
+ {s.parentName || '—'}<br/><span className={isFrozen ? 'text-red-900 font-bold' : 'text-slate-500'}>{s.parentPhone || s.phone || '—'}</span>
+ </td>
+ <td className={`font-mono font-bold ${isFrozen ? 'bg-red-100 text-red-950 border-red-300' : ''}`}>${total}</td>
+ <td className={`font-mono ${isFrozen ? 'bg-red-100 text-red-950 font-bold border-red-300' : 'text-amber-700'}`}>{adminFees > 0 ? `+$${adminFees}` : '$0'}</td>
+ <td className={`font-mono ${isFrozen ? 'bg-red-100 text-red-950 font-bold border-red-300' : 'text-emerald-700'}`}>{discount > 0 ? `-$${discount}` : '$0'}</td>
+ <td className={`font-mono ${isFrozen ? 'bg-red-100 text-red-950 font-black border-red-300' : 'text-[#0284C7] font-bold'}`}>${paid}</td>
+ <td className={`font-mono ${isFrozen ? 'bg-red-100 text-red-950 font-black border-red-300' : 'text-red-600 font-black'}`}>${rem}</td>
+ </tr>
+ );
+ })}
+ </tbody>
+
+ {/* Footer Summary Rows (All Accounts + Frozen Accounts) */}
+ <tfoot>
+ <tr>
+ <td colSpan={5} className="text-right font-black">
+ إجمالي التحصيلات المالية كافة ({safeStudents.length} طلاب)
+ </td>
+ <td className="font-mono font-bold">${safeStudents.reduce((sum, s) => sum + (Number(s.tuitionTotal) || 700), 0).toLocaleString()}</td>
+ <td className="font-mono text-amber-800">+${safeStudents.reduce((sum, s) => sum + (Number(s.adminFees) || 0), 0).toLocaleString()}</td>
+ <td className="font-mono text-emerald-800">-${safeStudents.reduce((sum, s) => sum + (Number(s.tuitionDiscount) || 0), 0).toLocaleString()}</td>
+ <td className="font-mono text-[#0284C7] font-black">${safeStudents.reduce((sum, s) => sum + (Number(s.tuitionPaid) || 0), 0).toLocaleString()}</td>
+ <td className="font-mono text-red-700 font-black">${totalRemainingUSD.toLocaleString()} USD</td>
+ </tr>
+
+ {frozenCount > 0 && (
+ <tr className="frozen-row bg-red-100 text-red-950 font-extrabold border-t-2 border-red-400">
+ <td colSpan={5} className="text-right font-black bg-red-100 text-red-950 border-red-300">
+ إجمالي مجموع الحسابات المجمدة ({frozenCount} طالب مجمد)
+ </td>
+ <td className="font-mono font-bold bg-red-100 text-red-950 border-red-300">${frozenTuitionTotal.toLocaleString()}</td>
+ <td className="font-mono text-red-900 bg-red-100 border-red-300">+${frozenAdminFees.toLocaleString()}</td>
+ <td className="font-mono text-red-900 bg-red-100 border-red-300">-${frozenDiscount.toLocaleString()}</td>
+ <td className="font-mono text-red-900 bg-red-100 border-red-300">${frozenPaid.toLocaleString()}</td>
+ <td className="font-mono text-red-950 font-black bg-red-100 border-red-300">${frozenRemaining.toLocaleString()} USD</td>
+ </tr>
+ )}
+ </tfoot>
+ </table>
+ </div>
+
+ {/* Bottom Document Footer: Summary Cards + Signatures (Guaranteed on Last Page Bottom) */}
+ <div className="statement-print-footer space-y-4">
+ {/* Financial Summary Cards Banner at the VERY BOTTOM */}
+ <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-center text-xs font-mono py-1">
+ <div className="bg-[#F8FAFC] border border-slate-200 p-2.5 rounded-2xl">
+ <span className="text-[10px] text-slate-500 font-sans font-bold block">إجمالي الأقساط:</span>
+ <span className="text-sm font-black text-[#0F172A]">${safeStudents.reduce((sum, s) => sum + (Number(s.tuitionTotal) || 700), 0).toLocaleString()}</span>
+ </div>
+ <div className="bg-[#F8FAFC] border border-slate-200 p-2.5 rounded-2xl">
+ <span className="text-[10px] text-slate-500 font-sans font-bold block">إجمالي الخصومات:</span>
+ <span className="text-sm font-black text-emerald-600">-${safeStudents.reduce((sum, s) => sum + (Number(s.tuitionDiscount) || 0), 0).toLocaleString()}</span>
+ </div>
+ <div className="bg-[#F8FAFC] border border-slate-200 p-2.5 rounded-2xl">
+ <span className="text-[10px] text-slate-500 font-sans font-bold block">إجمالي المقبوض:</span>
+ <span className="text-sm font-black text-[#0284C7]">${safeStudents.reduce((sum, s) => sum + (Number(s.tuitionPaid) || 0), 0).toLocaleString()}</span>
+ </div>
+ <div className="bg-[#F8FAFC] border border-red-200 p-2.5 rounded-2xl">
+ <span className="text-[10px] text-red-600 font-sans font-black block">إجمالي المتبقي:</span>
+ <span className="text-sm font-black text-red-600">${totalRemainingUSD.toLocaleString()} USD</span>
+ </div>
+ <div className="bg-red-50 border border-red-300 p-2.5 rounded-2xl col-span-2 sm:col-span-1">
+ <span className="text-[10px] text-red-800 font-sans font-black block">الحسابات المجمدة:</span>
+ <span className="text-sm font-black text-red-800">{frozenCount} طالب (${frozenRemaining})</span>
+ </div>
+ </div>
+
+ {/* Official Report Signatures Block */}
+ <div className="signature-section flex justify-between items-end pt-4 border-t-2 border-slate-300 text-xs text-slate-800">
+ <div>
+ <p className="font-extrabold text-sm">توقيع المسؤول المالي / المحاسب:</p>
+ <div className="h-10 border-b-2 border-slate-400 w-48 mt-1" />
+ </div>
+
+ <div className="text-center space-y-1">
+ <span className="px-5 py-1.5 rounded-full font-black text-xs border border-sky-300 bg-sky-50 text-[#0284C7] inline-block shadow-2xs">
+ ختم إدارة المدرسة الرسمي </span>
+ </div>
+
+ <div>
+ <p className="font-extrabold text-sm">اعتماد وتوقيع مدير المدرسة:</p>
+ <div className="h-10 border-b-2 border-slate-400 w-48 mt-1" />
+ </div>
+ </div>
+ </div>
+ </>
+ );
+ })()}
+
+ {/* Bottom Actions (Screen Only) */}
+ <div className="no-print flex justify-end gap-3 pt-4 border-t border-slate-200">
+ <button
+ onClick={() => setShowPrintStatementModal(false)}
+ className="btn-mustard px-5 py-2.5 rounded-xl text-xs font-bold shadow cursor-pointer"
+ >
+ إغلاق
+ </button>
+ 
+ <button
+ onClick={() => {
+ window.scrollTo(0, 0);
+ setTimeout(() => window.print(), 50);
+ }}
+ className="px-6 py-2.5 bg-[#0284C7] hover:bg-[#0369A1] text-white rounded-xl text-xs font-black cursor-pointer flex items-center gap-2 shadow-md transition-all"
+ >
+ <Printer className="w-4 h-4 text-white" />
+ <span>طباعة الكشف (A4) </span>
+ </button>
+ </div>
+
+ </div>
+ </div>,
+ document.body
+ )}
+
+ </div>
+ );
+};

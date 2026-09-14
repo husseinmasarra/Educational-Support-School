@@ -1,0 +1,2730 @@
+import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { useApp, defaultAvatars } from '../context/AppContext';
+import { exportToExcelCSV } from '../utils/exportUtils';
+import { 
+ Users, 
+ UserPlus, 
+ Search, 
+ Trash2, 
+ Eye, 
+ Phone, 
+ RefreshCw, 
+ Camera, 
+ CreditCard, 
+ Send, 
+ CheckCircle2, 
+ UserCheck, 
+ Edit3, 
+ BookOpen, 
+ DoorOpen,
+ Printer,
+ Bookmark
+} from 'lucide-react';
+const generateArabicUsername = (fn = '', mn = '', ln = '') => {
+  const parts = [(fn || '').trim(), (mn || '').trim(), (ln || '').trim()].filter(Boolean);
+  if (parts.length === 0) return '';
+  return parts.join(' ');
+};
+
+const getGradeSortOrder = (name = '') => {
+ const str = String(name || '').toLowerCase().trim().replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه');
+ const isKg = str.includes('روضه') || str.includes('kg') || str.includes('تمهيدي');
+
+ if (isKg) {
+ if (str.includes('اولى') || str.includes('اول') || str.includes('1')) return 1;
+ if (str.includes('ثانيه') || str.includes('ثاني') || str.includes('2')) return 2;
+ if (str.includes('ثالثه') || str.includes('ثالث') || str.includes('3')) return 3;
+ return 4;
+ }
+
+ if (str.includes('اول') || str.includes('1')) return 10;
+ if (str.includes('ثاني') || str.includes('2')) return 20;
+ if (str.includes('ثالث') || str.includes('3')) return 30;
+ if (str.includes('رابع') || str.includes('4')) return 40;
+ if (str.includes('خامس') || str.includes('5')) return 50;
+ if (str.includes('سادس') || str.includes('6')) return 60;
+ if (str.includes('سابع') || str.includes('7')) return 70;
+ if (str.includes('ثامن') || str.includes('8')) return 80;
+ if (str.includes('تاسع') || str.includes('9')) return 90;
+ if (str.includes('عاشر') || str.includes('10')) return 100;
+ if (str.includes('حادي') || str.includes('11')) return 110;
+ if (str.includes('ثاني عشر') || str.includes('12')) return 120;
+ return 999;
+};
+
+const getSectionSortOrder = (sec = '') => {
+ const str = String(sec || '').trim();
+ if (str.includes('أ') || str.includes('A')) return 1;
+ if (str.includes('ب') || str.includes('B')) return 2;
+ if (str.includes('ج') || str.includes('C')) return 3;
+ if (str.includes('د') || str.includes('D')) return 4;
+ if (str.includes('هـ') || str.includes('E')) return 5;
+ return 99;
+};
+
+const cleanGrade = (str) => (str || '')
+ .toLowerCase()
+ .trim()
+ .replace(/[أإآ]/g, 'ا')
+ .replace(/ة/g, 'ه')
+ .replace(/\s+/g, '');
+
+const isGradeMatch = (studentGrade, targetGrade) => {
+ if (!targetGrade) return true;
+ if (!studentGrade) return false;
+ 
+ if (studentGrade.trim() === targetGrade.trim()) return true;
+
+ const sG = cleanGrade(studentGrade);
+ const tG = cleanGrade(targetGrade);
+
+ if (sG === tG) return true;
+
+ const sIsKg = sG.includes('روضه') || sG.includes('kg') || sG.includes('تمهيدي');
+ const tIsKg = tG.includes('روضه') || tG.includes('kg') || tG.includes('تمهيدي');
+ if (sIsKg !== tIsKg) return false;
+
+ const getGradeLevel = (str) => {
+ if (str.includes('اولى') || str.includes('الاولى') || str.includes('اول') || str.includes('الاول') || str.includes('1st') || str.includes(' 1')) return '1';
+ if (str.includes('ثانيه') || str.includes('الثانيه') || str.includes('ثاني') || str.includes('الثاني') || str.includes('2nd') || str.includes(' 2')) return '2';
+ if (str.includes('ثالثه') || str.includes('الثالثه') || str.includes('ثالث') || str.includes('الثالث') || str.includes('3rd') || str.includes(' 3')) return '3';
+ if (str.includes('رابع') || str.includes('الرابع') || str.includes('4th') || str.includes(' 4')) return '4';
+ if (str.includes('خامس') || str.includes('الخامس') || str.includes('5th') || str.includes(' 5')) return '5';
+ if (str.includes('سادس') || str.includes('السادس') || str.includes('6th') || str.includes(' 6')) return '6';
+ if (str.includes('سابع') || str.includes('السابع') || str.includes('7th') || str.includes(' 7')) return '7';
+ if (str.includes('ثامن') || str.includes('الثامن') || str.includes('8th') || str.includes(' 8')) return '8';
+ if (str.includes('تاسع') || str.includes('التاسع') || str.includes('9th') || str.includes(' 9')) return '9';
+ if (str.includes('عاشر') || str.includes('العاشر') || str.includes('10th') || str.includes(' 10')) return '10';
+ if (str.includes('حادي') || str.includes('11th') || str.includes(' 11')) return '11';
+ if (str.includes('ثاني عشر') || str.includes('12th') || str.includes(' 12')) return '12';
+ return null;
+ };
+
+ const sLvl = getGradeLevel(sG);
+ const tLvl = getGradeLevel(tG);
+
+ if (sLvl && tLvl) {
+ return sLvl === tLvl;
+ }
+
+ return sG.includes(tG) || tG.includes(sG);
+};
+
+export const DirectoryModule = ({ initialSubTab = 'students' }) => {
+ const { 
+ lang, 
+ t, 
+ currentRole, 
+ currentUser,
+ students, 
+ teachers, 
+ grades = [],
+ classrooms = [],
+ addStudent, 
+ deleteStudent, 
+ updateStudent,
+ addTeacher, 
+ deleteTeacher, 
+ subjects = [],
+ addAgendaItem 
+ } = useApp();
+
+ const isAr = lang === 'ar';
+ const canManageStudents = currentRole === 'admin' || currentRole === 'assistant_admin' || currentUser?.permissions?.includes('add_student');
+ const safeStudents = students || [];
+ const safeTeachers = teachers || [];
+ const safeGrades = [...(grades || [])].sort((a, b) => getGradeSortOrder(a.name) - getGradeSortOrder(b.name));
+ const safeClassrooms = [...(classrooms || [])].sort((a, b) => {
+ const gDiff = getGradeSortOrder(a.gradeName) - getGradeSortOrder(b.gradeName);
+ if (gDiff !== 0) return gDiff;
+ return getSectionSortOrder(a.sectionName) - getSectionSortOrder(b.sectionName);
+ });
+ const safeSubjects = subjects || [];
+
+  // Robust family grouping key helper (matches by parentName first, ignores generic phones)
+  const getFamilyKey = (s) => {
+    if (!s) return 'unknown';
+    const pName = (s.parentName || s.parent_name || '').toString().trim().toLowerCase();
+    const pPhone = (s.parentPhone || s.phone || '').toString().trim();
+
+    const isGenericPhone = !pPhone || pPhone === 'غير مسجل' || pPhone.includes('03 456 123') || pPhone.includes('000 000');
+    const isGenericName = !pName || pName === 'غير محدد' || pName.startsWith('والد الطالب') || pName.startsWith('parent of');
+
+    if (!isGenericName) {
+      return `name:${pName}`;
+    }
+    if (!isGenericPhone) {
+      return `phone:${pPhone}`;
+    }
+    return `id:${s.id}`;
+  };
+
+ const normalizeArabic = (str) => {
+ if (!str) return '';
+ return str
+ .replace(/[أإآ]/g, 'ا')
+ .replace(/ة/g, 'ه')
+ .replace(/\s+/g, '')
+ .trim()
+ .toLowerCase();
+ };
+
+ const getClassroomsForGrade = (targetGrade) => {
+ if (!safeClassrooms || safeClassrooms.length === 0) return [];
+ const normTarget = normalizeArabic(targetGrade);
+ const matched = safeClassrooms.filter((c) => {
+ if (!c.gradeName) return true;
+ const normCG = normalizeArabic(c.gradeName);
+ return normCG.includes(normTarget) || normTarget.includes(normCG);
+ });
+ return matched.length > 0 ? matched : safeClassrooms;
+ };
+
+ const [activeTab, setActiveTab] = useState(initialSubTab);
+ const [searchTerm, setSearchTerm] = useState('');
+ const [selectedGradeFilter, setSelectedGradeFilter] = useState('all');
+
+ useEffect(() => {
+ if (initialSubTab) {
+ setActiveTab(initialSubTab);
+ }
+ }, [initialSubTab]);
+
+ // Add Student Modal State
+ const [showAddStudentModal, setShowAddStudentModal] = useState(false);
+ const [stuFirstName, setStuFirstName] = useState('');
+ const [stuFatherName, setStuFatherName] = useState('');
+ const [stuLastName, setStuLastName] = useState('');
+ const [stuName, setStuName] = useState('');
+ const [stuNameEn, setStuNameEn] = useState('');
+ const [stuUsername, setStuUsername] = useState('');
+ const [stuPassword, setStuPassword] = useState('123456');
+ const [stuGrade, setStuGrade] = useState(() => safeGrades[0]?.name || 'الصف الخامس الابتدائي');
+ const [stuGradeEn, setStuGradeEn] = useState(() => safeGrades[0]?.nameEn || 'Grade 5');
+ const [stuClassRoom, setStuClassRoom] = useState(() => safeClassrooms[0]?.sectionName || 'أ');
+ const [stuTuitionTotal, setStuTuitionTotal] = useState(() => (safeGrades[0]?.tuitionFee || 700).toString());
+ const [stuTuitionDiscount, setStuTuitionDiscount] = useState('0');
+ const [stuAdminFees, setStuAdminFees] = useState('0');
+ const [stuHasTransport, setStuHasTransport] = useState(false);
+ const [stuTransportFee, setStuTransportFee] = useState('0');
+ const [stuAvatar, setStuAvatar] = useState(defaultAvatars[0]);
+ const [stuParentName, setStuParentName] = useState('');
+ const [stuParentPhone, setStuParentPhone] = useState('');
+ const [stuMotherPhone, setStuMotherPhone] = useState('');
+ const [stuMinistryClearance, setStuMinistryClearance] = useState('');
+ const [stuIsSpecialCase, setStuIsSpecialCase] = useState(false);
+ const [studentToPrint, setStudentToPrint] = useState(null);
+ const [addAnotherSibling, setAddAnotherSibling] = useState(false);
+ const [siblingsList, setSiblingsList] = useState([]);
+
+ const addSiblingRow = () => {
+    // Inherit fatherName and lastName from primary student, clear First Name
+    const suggestedUsername = generateArabicUsername('', stuFatherName, stuLastName) || `طالب.${Date.now().toString().slice(-4)}`;
+    const defaultTuition = stuIsSpecialCase ? '0' : (safeGrades[0]?.tuitionFee || 700).toString();
+    setSiblingsList([...siblingsList, {
+      id: Math.random().toString(),
+      name: '', // Empty first name ready for new sibling input
+      fatherName: stuFatherName,
+      lastName: stuLastName,
+      nameEn: '',
+      grade: safeGrades[0]?.name || 'الصف الأول الابتدائي',
+      gradeEn: safeGrades[0]?.nameEn || 'Grade 1',
+      classRoom: 'أ',
+      tuitionTotal: defaultTuition,
+      tuitionDiscount: '0',
+      adminFees: '0',
+      transportFee: '0',
+      hasTransport: false,
+      username: suggestedUsername,
+      password: Math.floor(100000 + Math.random() * 900000).toString(),
+      ministryClearance: ''
+    }]);
+ };
+
+ const removeSiblingRow = (id) => {
+    setSiblingsList(siblingsList.filter(s => s.id !== id));
+ };
+
+ const updateSiblingField = (index, field, val) => {
+    const updated = [...siblingsList];
+    updated[index][field] = val;
+    if (field === 'name') {
+      // Auto-generate username from First Name + Inherited Father Name + Inherited Surname
+      const autoUser = generateArabicUsername(val, stuFatherName, stuLastName);
+      if (autoUser) {
+        updated[index].username = autoUser;
+      }
+    }
+    if (field === 'grade') {
+      const foundGrd = safeGrades.find(g => g.name === val);
+      if (foundGrd) {
+        updated[index].gradeEn = foundGrd.nameEn || val;
+        if (!stuIsSpecialCase) {
+          updated[index].tuitionTotal = (foundGrd.tuitionFee || 700).toString();
+        } else {
+          updated[index].tuitionTotal = '0';
+        }
+      }
+    }
+    setSiblingsList(updated);
+ };
+
+ // Edit Student Modal State
+ const [showEditStudentModal, setShowEditStudentModal] = useState(null);
+ const [editStuName, setEditStuName] = useState('');
+ const [editStuNameEn, setEditStuNameEn] = useState('');
+ const [editStuUsername, setEditStuUsername] = useState('');
+ const [editStuPassword, setEditStuPassword] = useState('123456');
+ const [editStuGrade, setEditStuGrade] = useState('');
+ const [editStuGradeEn, setEditStuGradeEn] = useState('');
+ const [editStuClassRoom, setEditStuClassRoom] = useState('أ');
+ const [editStuTuitionTotal, setEditStuTuitionTotal] = useState('');
+ const [editStuTuitionPaid, setEditStuTuitionPaid] = useState('');
+ const [editStuTuitionDiscount, setEditStuTuitionDiscount] = useState('0');
+ const [editStuAdminFees, setEditStuAdminFees] = useState('0');
+ const [editStuHasTransport, setEditStuHasTransport] = useState(false);
+ const [editStuTransportFee, setEditStuTransportFee] = useState('0');
+ const [editStuParentName, setEditStuParentName] = useState('');
+ const [editStuParentPhone, setEditStuParentPhone] = useState('');
+ const [editStuMotherPhone, setEditStuMotherPhone] = useState('');
+ const [editStuMinistryClearance, setEditStuMinistryClearance] = useState('');
+ const [editIsSpecialCase, setEditIsSpecialCase] = useState(false);
+
+ // Print Lists States
+ const [isPrintingStudentsTable, setIsPrintingStudentsTable] = useState(false);
+ const [isPrintingTeachersTable, setIsPrintingTeachersTable] = useState(false);
+
+ // Add Teacher Modal State
+ const [showAddTeacherModal, setShowAddTeacherModal] = useState(false);
+ const [tchName, setTchName] = useState('');
+ const [tchNameEn, setTchNameEn] = useState('');
+ const [tchUsername, setTchUsername] = useState('');
+ const [tchPassword, setTchPassword] = useState('123456');
+ const [tchSubjects, setTchSubjects] = useState(() => [safeSubjects[0]?.name || 'الرياضيات']);
+ const [tchAssignedClasses, setTchAssignedClasses] = useState([]);
+ const [tchSalary, setTchSalary] = useState('1200');
+ const [tchAvatar, setTchAvatar] = useState(defaultAvatars[1]);
+
+ // Edit Teacher Modal State
+ const [showEditTeacherModal, setShowEditTeacherModal] = useState(null);
+
+ // Teacher Send Lesson Modal State
+ const [showSendLessonModal, setShowSendLessonModal] = useState(null);
+ const [lessonTitle, setLessonTitle] = useState('');
+ const [lessonHomework, setLessonHomework] = useState('');
+ const [lessonGrade, setLessonGrade] = useState(() => safeGrades[0]?.name || 'الصف السادس');
+ const [lessonClass, setLessonClass] = useState('أ');
+
+ // Student Details Modal State
+ const [showStudentDetailModal, setShowStudentDetailModal] = useState(null);
+
+ // Success Toast State
+ const [successMsg, setSuccessMsg] = useState('');
+
+ // Close any open modals when pressing ESC key
+ useEffect(() => {
+ const handleKeyDown = (e) => {
+ if (e.key === 'Escape' || e.code === 'Escape') {
+ setShowAddStudentModal(false);
+ setShowEditStudentModal(null);
+ setShowAddTeacherModal(false);
+ setShowEditTeacherModal(null);
+ setShowSendLessonModal(null);
+ setShowStudentDetailModal(null);
+ setStudentToPrint(null);
+ }
+ };
+ window.addEventListener('keydown', handleKeyDown);
+ return () => window.removeEventListener('keydown', handleKeyDown);
+ }, []);
+
+ // Handle Student Photo File Upload
+ const handleStudentAvatarUpload = (e) => {
+ const file = e.target.files[0];
+ if (file) {
+ const reader = new FileReader();
+ reader.onloadend = () => setStuAvatar(reader.result);
+ reader.readAsDataURL(file);
+ }
+ };
+
+ // Handle Teacher Photo File Upload
+ const handleTeacherAvatarUpload = (e) => {
+ const file = e.target.files[0];
+ if (file) {
+ const reader = new FileReader();
+ reader.onloadend = () => setTchAvatar(reader.result);
+ reader.readAsDataURL(file);
+ }
+ };
+
+ // Auto-Generate Random Password
+ const handleRegenerateStuPassword = () => setStuPassword(Math.floor(100000 + Math.random() * 900000).toString());
+ const handleRegenerateTchPassword = () => setTchPassword(Math.floor(100000 + Math.random() * 900000).toString());
+
+ const handlePrintClearance = (student) => {
+ setStudentToPrint(student);
+ setTimeout(() => {
+ window.print();
+ }, 150);
+ };
+
+ const handlePrintStudentsTable = () => {
+ setIsPrintingStudentsTable(true);
+ setTimeout(() => {
+ window.print();
+ setIsPrintingStudentsTable(false);
+ }, 150);
+ };
+
+ const handlePrintTeachersTable = () => {
+ setIsPrintingTeachersTable(true);
+ setTimeout(() => {
+ window.print();
+ setIsPrintingTeachersTable(false);
+ }, 150);
+ };
+
+ const handleOpenAddSiblingToFamily = (primaryStu) => {
+ const parentPhone = (primaryStu.parentPhone || primaryStu.phone || '').trim();
+ const parentName = primaryStu.parentName || `عائلة ${primaryStu.name.split(' ').slice(-1)[0]}`;
+ 
+ setStuName('');
+ setStuNameEn('');
+ const nextRand = Math.floor(100 + Math.random() * 900);
+ setStuUsername(`student.${Date.now().toString().slice(-4)}${nextRand}`);
+ setStuPassword(Math.floor(100000 + Math.random() * 900000).toString());
+ setStuParentName(parentName);
+ setStuParentPhone(parentPhone);
+ setStuMotherPhone(primaryStu.motherPhone || '');
+ setStuGrade(safeGrades[0]?.name || 'الصف الأول الابتدائي');
+ setStuGradeEn(safeGrades[0]?.nameEn || 'Grade 1');
+ setStuClassRoom('أ');
+ setStuTuitionTotal((safeGrades[0]?.tuitionFee || 700).toString());
+ setStuTuitionDiscount('0');
+ setStuAdminFees('0');
+ setStuHasTransport(false);
+ setStuTransportFee('0');
+ setStuIsSpecialCase(false);
+ setSiblingsList([]);
+ setShowAddStudentModal(true);
+ };
+
+ const handleOpenEditStudentModal = (student) => {
+ setShowEditStudentModal(student);
+ setEditStuName(student.name);
+ setEditStuNameEn(student.nameEn || '');
+ setEditStuUsername(student.username);
+ setEditStuPassword(student.password);
+ setEditStuGrade(student.grade);
+ setEditStuGradeEn(student.gradeEn || '');
+ setEditStuClassRoom(student.classRoom || 'أ');
+ setEditStuTuitionTotal(student.tuitionTotal?.toString() || '0');
+ setEditStuTuitionPaid(student.tuitionPaid?.toString() || '0');
+ setEditStuTuitionDiscount(student.tuitionDiscount?.toString() || '0');
+ setEditStuAdminFees(student.adminFees?.toString() || '0');
+ setEditStuHasTransport(!!student.hasTransport);
+ setEditStuTransportFee(student.transportFee?.toString() || '0');
+ setEditStuParentName(student.parentName || '');
+ setEditStuParentPhone(student.phone || student.parentPhone || '');
+ setEditStuMotherPhone(student.motherPhone || '');
+ setEditStuMinistryClearance(student.ministryClearance || '');
+ setEditIsSpecialCase(!!student.isSpecialCase);
+ };
+
+ const handleEditStudentSubmit = (e) => {
+ e.preventDefault();
+ if (!editStuName || !editStuUsername) return;
+
+ // Verify Ministry Clearance uniqueness (excluding current student)
+ if (editStuMinistryClearance.trim()) {
+ const isDuplicate = (students || []).some(
+ s => s.id !== showEditStudentModal.id && s.ministryClearance && s.ministryClearance.trim() === editStuMinistryClearance.trim()
+ );
+ if (isDuplicate) {
+ alert(isAr ? ' رقم الإفادة هذا مسجل بالفعل لطالب آخر!' : 'Ministry Clearance reference is already registered to another student!');
+ return;
+ }
+ }
+
+ updateStudent(showEditStudentModal.id, {
+ name: editStuName,
+ nameEn: editStuNameEn || editStuName,
+ username: editStuUsername,
+ password: editStuPassword,
+ grade: editStuGrade,
+ gradeEn: editStuGradeEn,
+ classRoom: editStuClassRoom,
+ tuitionTotal: Number(editStuTuitionTotal),
+ tuitionPaid: Number(editStuTuitionPaid),
+ tuitionDiscount: Number(editStuTuitionDiscount),
+ adminFees: Number(editStuAdminFees || 0),
+ hasTransport: editStuHasTransport,
+ transportFee: Number(editStuTransportFee || 0),
+ phone: editStuParentPhone,
+ parentPhone: editStuParentPhone,
+ motherPhone: editStuMotherPhone,
+ parentName: editStuParentName,
+ parentNameEn: editStuParentName,
+ ministryClearance: editStuMinistryClearance.trim(),
+ isSpecialCase: editIsSpecialCase
+ });
+
+ setShowEditStudentModal(null);
+ setSuccessMsg(isAr ? 'تم تعديل ملف الطالب بنجاح!' : 'Student file updated successfully!');
+ setTimeout(() => setSuccessMsg(''), 4000);
+ };
+
+ const handleAddStudentSubmit = (e) => {
+ e.preventDefault();
+ if (!stuName || !stuUsername) return;
+
+ // 1. Verify primary student Ministry Clearance Number uniqueness
+ if (stuMinistryClearance.trim()) {
+ const isDuplicate = (students || []).some(
+ s => s.ministryClearance && s.ministryClearance.trim() === stuMinistryClearance.trim()
+ );
+ if (isDuplicate) {
+ alert(isAr ? ' رقم الإفادة للطالب الرئيسي مسجل بالفعل لطالب آخر!' : 'Primary student Ministry Clearance number is already assigned!');
+ return;
+ }
+ }
+
+ // 2. Verify primary student Username uniqueness
+ const usernameDuplicate = (students || []).some(
+ s => s.username && s.username.toLowerCase().trim() === stuUsername.toLowerCase().trim()
+ );
+ if (usernameDuplicate) {
+ alert(isAr ? ' اسم المستخدم للطالب الرئيسي غير متاح!' : 'Primary student username is not available!');
+ return;
+ }
+
+ // 3. Verify siblings validations
+ for (let i = 0; i < siblingsList.length; i++) {
+ const sib = siblingsList[i];
+ if (!sib.name.trim()) {
+ alert(isAr ? ` يرجى إدخال اسم الأخ/الأخت المضاف رقم ${i + 1}` : `Please enter name for sibling #${i + 1}`);
+ return;
+ }
+ if (!sib.username.trim()) {
+ alert(isAr ? ` يرجى إدخال اسم مستخدم للأخ/الأخت رقم ${i + 1}` : `Please enter username for sibling #${i + 1}`);
+ return;
+ }
+
+ // Verify sibling username uniqueness
+ const sibUsernameDuplicate = (students || []).some(
+ s => s.username && s.username.toLowerCase().trim() === sib.username.toLowerCase().trim()
+ ) || siblingsList.some((s, idx) => idx !== i && s.username.toLowerCase().trim() === sib.username.toLowerCase().trim()) || sib.username.toLowerCase().trim() === stuUsername.toLowerCase().trim();
+ if (sibUsernameDuplicate) {
+ alert(isAr ? ` اسم المستخدم للأخ/الأخت "${sib.name}" غير متاح أو مكرر!` : `Username for sibling "${sib.name}" is already taken or duplicate!`);
+ return;
+ }
+
+ // Verify sibling ministry clearance uniqueness
+ if (sib.ministryClearance.trim()) {
+ const sibMCIsDuplicate = (students || []).some(
+ s => s.ministryClearance && s.ministryClearance.trim() === sib.ministryClearance.trim()
+ ) || siblingsList.some((s, idx) => idx !== i && s.ministryClearance && s.ministryClearance.trim() === sib.ministryClearance.trim()) || sib.ministryClearance.trim() === stuMinistryClearance.trim();
+ if (sibMCIsDuplicate) {
+ alert(isAr ? ` رقم الإفادة للأخ/الأخت "${sib.name}" مسجل بالفعل أو مكرر!` : `Ministry Clearance for sibling "${sib.name}" is duplicate!`);
+ return;
+ }
+ }
+ }
+
+ // 4. Save primary student
+ const fullPrimaryName = `${stuFirstName} ${stuFatherName} ${stuLastName}`.trim() || stuName;
+ addStudent({
+ firstName: stuFirstName,
+ fatherName: stuFatherName,
+ lastName: stuLastName,
+ name: fullPrimaryName,
+ nameEn: stuNameEn || fullPrimaryName,
+ username: stuUsername,
+ password: stuPassword,
+ grade: stuGrade || (safeGrades[0]?.name || 'الصف الأول الابتدائي'),
+ gradeEn: stuGradeEn || (safeGrades[0]?.nameEn || 'Grade 1'),
+ classRoom: stuClassRoom || 'أ',
+ avatar: stuAvatar,
+ tuitionTotal: Number(stuTuitionTotal),
+ tuitionPaid: 0,
+ tuitionDiscount: Number(stuTuitionDiscount),
+ adminFees: Number(stuAdminFees || 0),
+ hasTransport: stuHasTransport,
+ transportFee: Number(stuTransportFee || 0),
+ phone: stuParentPhone || '+961 03 123 456',
+ parentPhone: stuParentPhone || '+961 03 123 456',
+ motherPhone: stuMotherPhone,
+ parentName: stuParentName || `والد الطالب ${stuName}`,
+ parentNameEn: stuParentName || `Parent of ${stuNameEn || stuName}`,
+ ministryClearance: stuMinistryClearance.trim(),
+ isSpecialCase: stuIsSpecialCase,
+ frozen: false
+ });
+
+ // 5. Save all added siblings as completely separate students in their own grade & classroom
+ siblingsList.forEach(sib => {
+ const rawSibName = (sib.name || '').trim();
+ const parts = rawSibName.split(/\s+/).filter(Boolean);
+ const sibFirstName = parts[0] || rawSibName;
+ const fullSibName = parts.length >= 3 
+ ? rawSibName 
+ : `${sibFirstName} ${stuFatherName} ${stuLastName}`.trim();
+
+ addStudent({
+ firstName: sibFirstName,
+ fatherName: stuFatherName,
+ lastName: stuLastName,
+ name: fullSibName,
+ nameEn: fullSibName,
+ username: sib.username,
+ password: sib.password,
+ grade: sib.grade || (safeGrades[0]?.name || 'الصف الأول الابتدائي'),
+ gradeEn: sib.gradeEn || (safeGrades[0]?.nameEn || 'Grade 1'),
+ classRoom: sib.classRoom || 'أ',
+ avatar: stuAvatar,
+ tuitionTotal: Number(sib.tuitionTotal),
+ tuitionPaid: 0,
+ tuitionDiscount: Number(sib.tuitionDiscount),
+ adminFees: Number(sib.adminFees || 0),
+ hasTransport: !!sib.hasTransport,
+ transportFee: Number(sib.transportFee || 0),
+ phone: stuParentPhone || '+961 03 123 456',
+ parentPhone: stuParentPhone || '+961 03 123 456',
+ motherPhone: stuMotherPhone,
+ parentName: stuParentName || `عائلة ${stuLastName || fullSibName}`,
+ parentNameEn: stuParentName || `Family of ${stuLastName || fullSibName}`,
+ ministryClearance: sib.ministryClearance.trim(),
+ isSpecialCase: stuIsSpecialCase,
+ frozen: false
+ });
+ });
+
+ // 6. Reset Form
+ setStuName('');
+ setStuNameEn('');
+ setStuUsername('');
+ setStuParentName('');
+ setStuParentPhone('');
+ setStuMotherPhone('');
+ setStuMinistryClearance('');
+ setStuTuitionDiscount('0');
+ setStuAdminFees('0');
+ setStuHasTransport(false);
+ setStuTransportFee('0');
+ setSiblingsList([]);
+ setShowAddStudentModal(false);
+ setSuccessMsg(isAr ? 'تم إضافة الطالب وإخوته وتوثيق بيانات العائلة بنجاح!' : 'Students added successfully!');
+ setTimeout(() => setSuccessMsg(''), 4000);
+ };
+
+ const handleAddTeacherSubmit = (e) => {
+ e.preventDefault();
+ if (!tchName || !tchUsername) return;
+
+ const finalSubjects = tchSubjects.length > 0 ? tchSubjects : [safeSubjects[0]?.name || 'الرياضيات'];
+
+ addTeacher({
+ name: tchName,
+ nameEn: tchNameEn || tchName,
+ username: tchUsername,
+ password: tchPassword,
+ subject: finalSubjects[0],
+ subjects: finalSubjects,
+ assignedClassrooms: tchAssignedClasses,
+ avatar: tchAvatar,
+ monthlySalary: Number(tchSalary)
+ });
+
+ setTchName('');
+ setTchNameEn('');
+ setTchUsername('');
+ setTchSubjects([safeSubjects[0]?.name || 'الرياضيات']);
+ setTchAssignedClasses([]);
+ setShowAddTeacherModal(false);
+ setSuccessMsg(isAr ? 'تم إضافة المعلم وإسناد المواد والصفوف بنجاح!' : 'Teacher added successfully!');
+ setTimeout(() => setSuccessMsg(''), 4000);
+ };
+
+ const handleEditTeacherSubmit = (e) => {
+ e.preventDefault();
+ if (!showEditTeacherModal) return;
+
+ deleteTeacher(showEditTeacherModal.id);
+
+ addTeacher({
+ ...showEditTeacherModal,
+ id: showEditTeacherModal.id
+ });
+
+ setShowEditTeacherModal(null);
+ setSuccessMsg(isAr ? 'تم تحديث مواد وصفوف المعلم بنجاح!' : 'Teacher updated successfully!');
+ setTimeout(() => setSuccessMsg(''), 4000);
+ };
+
+ const handleSendLessonSubmit = (e) => {
+ e.preventDefault();
+ if (!showSendLessonModal || !lessonTitle) return;
+
+ addAgendaItem({
+ date: new Date().toISOString().split('T')[0],
+ grade: lessonGrade,
+ classRoom: lessonClass,
+ subject: showSendLessonModal.subject || (showSendLessonModal.subjects?.[0] || 'المادة'),
+ title: lessonTitle,
+ titleEn: lessonTitle,
+ homework: lessonHomework,
+ homeworkEn: lessonHomework,
+ dueDate: new Date().toISOString().split('T')[0]
+ });
+
+ setLessonTitle('');
+ setLessonHomework('');
+ setShowSendLessonModal(null);
+ setSuccessMsg(isAr ? 'تم إرسال ونشر الدرس للطلاب بنجاح!' : 'Lesson sent successfully!');
+ setTimeout(() => setSuccessMsg(''), 4000);
+ };
+
+ // Toggle subject selection
+ const toggleSubjectSelect = (subName, targetState, setTargetState) => {
+ if (targetState.includes(subName)) {
+ setTargetState(targetState.filter((s) => s !== subName));
+ } else {
+ setTargetState([...targetState, subName]);
+ }
+ };
+
+ // Toggle class selection
+ const toggleClassSelect = (classLabel, targetState, setTargetState) => {
+ if (targetState.includes(classLabel)) {
+ setTargetState(targetState.filter((c) => c !== classLabel));
+ } else {
+ setTargetState([...targetState, classLabel]);
+ }
+ };
+
+ const getSectionLetter = (str) => {
+ if (!str) return '';
+ const m = str.match(/[\(\s\-\_]([أبجدA-Z])[\)\s\-\_]?$/) || str.match(/([أبجدA-Z])/g);
+ return m ? m[m.length - 1] : '';
+ };
+
+ const normGradeStr = (str) => (str || '')
+ .toLowerCase()
+ .replace(/[أإآ]/g, 'ا')
+ .replace('الابتدائي', '')
+ .replace('المتوسط', '')
+ .replace('الثانوي', '')
+ .replace('الصف', '')
+ .replace('الشعبة', '')
+ .replace(/[\(\)\-\_\s]/g, '');
+
+ const isStudentAssignedToTeacher = (student, assignedList) => {
+ if (!assignedList || assignedList.length === 0) return true;
+ const sGrade = normGradeStr(student.grade);
+ const sSec = getSectionLetter(student.classRoom || student.classroom);
+
+ return assignedList.some((assignedItem) => {
+ const aGrade = normGradeStr(assignedItem);
+ const aSec = getSectionLetter(assignedItem);
+ const gradeMatches = !sGrade || !aGrade || aGrade.includes(sGrade) || sGrade.includes(aGrade.replace(/[أبجدA-Z]/g, ''));
+ const secMatches = !sSec || !aSec || sSec === aSec;
+ return gradeMatches && secMatches;
+ });
+ };
+
+ // Smart Search & Filter Logic
+ const filteredStudents = safeStudents.filter((s) => {
+ const term = searchTerm.toLowerCase().trim();
+ const matchesSearch = !term || 
+ (s.name || '').toLowerCase().includes(term) || 
+ (s.nameEn || '').toLowerCase().includes(term) ||
+ (s.id || '').toLowerCase().includes(term) ||
+ (s.username || '').toLowerCase().includes(term) ||
+ (s.grade || '').toLowerCase().includes(term) ||
+ (s.classRoom || '').toLowerCase().includes(term) ||
+ (s.parentName || '').toLowerCase().includes(term) ||
+ (s.parentPhone || '').includes(term) ||
+ (s.phone || '').includes(term) ||
+ (s.motherPhone || '').includes(term) ||
+ (s.ministryClearance || '').toLowerCase().includes(term);
+ const matchesGrade = selectedGradeFilter === 'all'
+ ? true
+ : selectedGradeFilter === 'special_cases'
+ ? !!s.isSpecialCase
+ : isGradeMatch(s.grade, selectedGradeFilter);
+ const matchesTeacherAssignment = currentRole !== 'teacher' || isStudentAssignedToTeacher(s, currentUser?.assignedClassrooms || currentUser?.assignedClasses || []);
+
+ return matchesSearch && matchesGrade && matchesTeacherAssignment;
+ });
+
+ const filteredTeachers = safeTeachers.filter((t) => {
+ const teacherSubjectsStr = (t.subjects || [t.subject]).join(' ').toLowerCase();
+ return t.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+ t.nameEn.toLowerCase().includes(searchTerm.toLowerCase()) ||
+ teacherSubjectsStr.includes(searchTerm.toLowerCase());
+ });
+
+ const handleExportStudentsExcel = () => {
+ const headers = ['المعرف', 'اسم الطالب', 'Name En', 'الصف', 'الشعبة', 'اسم ولي الأمر', 'هاتف ولي الأمر', 'القسط السنوي ($)', 'الخصم الممنوح ($)', 'المبلغ المدفوع ($)', 'المبلغ المتبقي ($)'];
+ const rows = (safeStudents || []).map(s => {
+ const tot = Number(s.tuitionTotal) || 0;
+ const disc = Number(s.tuitionDiscount) || 0;
+ const paid = Number(s.tuitionPaid) || 0;
+ const rem = Math.max(0, tot - disc - paid);
+ return [
+ s.id, s.name, s.nameEn || '', s.grade, s.classRoom || '', s.parentName || '', s.parentPhone || '', tot, disc, paid, rem
+ ];
+ });
+ exportToExcelCSV(`kashf-tullab-${new Date().toISOString().slice(0,10)}.csv`, headers, rows);
+ };
+
+ const handleExportTeachersExcel = () => {
+ const headers = ['المعرف', 'اسم المعلم', 'المادة الرئيسية', 'الراتب الشهري ($)', 'المكافأة المستحقة ($)', 'الهاتف'];
+ const rows = (safeTeachers || []).map(t => [
+ t.id, t.name, t.subject, t.monthlySalary || 1200, t.dueBonus || 0, t.phone || ''
+ ]);
+ exportToExcelCSV(`kashf-mudarisin-${new Date().toISOString().slice(0,10)}.csv`, headers, rows);
+ };
+
+ return (
+ <div className="space-y-6 animate-fade-in text-[#0F172A]">
+ 
+ {/* Title Header Banner */}
+ <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white border border-[#E2E8F0] p-6 rounded-3xl shadow-sm text-[#0F172A]">
+ <div className="flex items-center gap-3">
+ <div className="p-3 bg-[#0284C7]/10 text-[#0284C7] rounded-2xl">
+ <Users className="w-6 h-6" />
+ </div>
+ <div>
+ <h2 className="text-xl font-bold text-[#0284C7]">{isAr ? 'دليل المدرسة وسجل الحسابات' : 'School Directory & Accounts'}</h2>
+ <p className="text-xs text-slate-500 mt-1">
+ {isAr 
+ ? "سجل حسابات الطلاب المعلمين، إسناد أكثر من مادة وصف وشعبة لكل معلم."
+ : "Manage students, teachers, assign multiple subjects & classrooms per teacher."}
+ </p>
+ </div>
+ </div>
+
+ {/* Admin / Assistant Admin Action Buttons */}
+ {(currentRole === 'admin' || canManageStudents) && (
+ <div className="flex flex-wrap items-center gap-2">
+ {activeTab === 'students' && (
+ <>
+ <button
+ onClick={handlePrintStudentsTable}
+ className="px-3.5 py-2.5 bg-amber-50 text-amber-600 border border-amber-200 hover:bg-amber-100 rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+ title={isAr ? "طباعة كشف كافة الطلاب" : "Print Student Roster"}
+ >
+ <Printer className="w-4 h-4" />
+ <span>{isAr ? "طباعة كشف الطلاب " : "Print Roster"}</span>
+ </button>
+
+ <button
+ onClick={handleExportStudentsExcel}
+ className="px-3.5 py-2.5 bg-sky-50 text-[#0284C7] border border-sky-200 hover:bg-sky-100 rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
+ title="تصدير سجل كافة الطلاب لملف اكسل"
+ >
+ <span>تصدير Excel </span>
+ </button>
+
+ <button
+ onClick={() => setShowAddStudentModal(true)}
+ className="btn-mustard flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-extrabold shadow cursor-pointer transition-all hover:scale-105"
+ >
+ <UserPlus className="w-4 h-4" />
+ <span>{isAr ? "إضافة طالب جديد +" : "Add Student +"}</span>
+ </button>
+ </>
+ )}
+
+ {activeTab === 'teachers' && (
+ <>
+ <button
+ onClick={handlePrintTeachersTable}
+ className="px-3.5 py-2.5 bg-amber-50 text-amber-600 border border-amber-200 hover:bg-amber-100 rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+ title={isAr ? "طباعة كشف كافة المعلمين" : "Print Teacher Roster"}
+ >
+ <Printer className="w-4 h-4" />
+ <span>{isAr ? "طباعة كشف المعلمين " : "Print Roster"}</span>
+ </button>
+
+ <button
+ onClick={handleExportTeachersExcel}
+ className="px-3.5 py-2.5 bg-sky-50 text-[#0284C7] border border-sky-200 hover:bg-sky-100 rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer"
+ title="تصدير سجل المعلمين لملف اكسل"
+ >
+ <span>تصدير Excel </span>
+ </button>
+
+ <button
+ onClick={() => setShowAddTeacherModal(true)}
+ className="btn-mustard flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-extrabold shadow cursor-pointer transition-all hover:scale-105"
+ >
+ <UserPlus className="w-4 h-4" />
+ <span>{isAr ? "إضافة معلم جديد +" : "Add Teacher +"}</span>
+ </button>
+ </>
+ )}
+ </div>
+ )}
+ </div>
+
+ {/* Success Notification */}
+ {successMsg && (
+ <div className="bg-emerald-50 border border-emerald-300 text-emerald-800 p-4 rounded-2xl flex items-center gap-3 text-xs font-semibold animate-fade-in shadow-lg">
+ <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
+ <span>{successMsg}</span>
+ </div>
+ )}
+
+ {/* Sub-Navigation Tabs & Smart Search Bar */}
+ <div className="space-y-3">
+ <div className="flex flex-col md:flex-row items-center justify-between gap-4 bg-white border border-[#E2E8F0] p-4 rounded-3xl shadow-sm text-[#0F172A]">
+ <div className="flex items-center gap-2 w-full md:w-auto">
+ <button
+ onClick={() => setActiveTab('students')}
+ className={`flex-1 md:flex-none px-5 py-2.5 rounded-2xl text-xs font-extrabold transition-all cursor-pointer flex items-center justify-center gap-2 ${
+ activeTab === 'students' ? 'bg-[#0284C7] text-white shadow-md' : 'bg-[#F8FAFC] text-slate-600 hover:bg-slate-200'
+ }`}
+ >
+ <span>{isAr ? `دليل كروت الطلاب (${safeStudents.length})` : `Student Cards (${safeStudents.length})`}</span>
+ </button>
+
+ <button
+ onClick={() => setActiveTab('teachers')}
+ className={`flex-1 md:flex-none px-5 py-2.5 rounded-2xl text-xs font-extrabold transition-all cursor-pointer flex items-center justify-center gap-2 ${
+ activeTab === 'teachers' ? 'bg-[#0284C7] text-white shadow-md' : 'bg-[#F8FAFC] text-slate-600 hover:bg-slate-200'
+ }`}
+ >
+ <span>{isAr ? `كادر المعلمين (${safeTeachers.length})` : `Teachers (${safeTeachers.length})`}</span>
+ </button>
+ </div>
+
+ {/* Smart Search Bar */}
+ <div className="relative w-full md:w-96">
+ <Search className="w-4 h-4 text-[#0284C7] absolute top-3 right-3 rtl:right-3 ltr:left-3 pointer-events-none" />
+ <input
+ type="text"
+ value={searchTerm}
+ onChange={(e) => setSearchTerm(e.target.value)}
+ placeholder={isAr ? 'البحث الذكي (الاسم، المعرف ID، الصف، الشعبة، اسم الدخول...)' : 'Search by name, ID, grade, username...'}
+ className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-2xl px-9 py-2.5 text-xs font-semibold focus:outline-none focus:border-[#0284C7] focus:ring-2 focus:ring-[#0284C7]/20 transition-all shadow-inner"
+ />
+ {searchTerm && (
+ <button
+ onClick={() => setSearchTerm('')}
+ className="absolute top-2.5 left-3 rtl:left-3 ltr:right-3 text-slate-400 hover:text-red-500 text-xs font-bold bg-slate-200 hover:bg-slate-300 w-5 h-5 rounded-full flex items-center justify-center transition-colors cursor-pointer"
+ title="مسح البحث"
+ >
+ </button>
+ )}
+ </div>
+ </div>
+
+ {/* Grade Quick Filter Pills (for Students) */}
+ {activeTab === 'students' && (
+ <div className="flex items-center gap-2 overflow-x-auto pb-1 px-1 no-scrollbar">
+ <span className="text-[11px] font-bold text-slate-500 shrink-0 ml-1">فلترة الصفوف:</span>
+ <button
+ onClick={() => setSelectedGradeFilter('all')}
+ className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-all cursor-pointer ${
+ selectedGradeFilter === 'all'
+ ? 'bg-[#0284C7] text-white shadow-xs'
+ : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+ }`}
+ >
+ {isAr ? `الكل (${safeStudents.length})` : `All (${safeStudents.length})`}
+ </button>
+
+ {/* Special Cases Filter Button */}
+ <button
+ onClick={() => setSelectedGradeFilter(selectedGradeFilter === 'special_cases' ? 'all' : 'special_cases')}
+ className={`px-3 py-1.5 rounded-xl text-xs font-extrabold shrink-0 transition-all cursor-pointer flex items-center gap-1.5 ${
+ selectedGradeFilter === 'special_cases'
+ ? 'bg-amber-500 text-white shadow-md'
+ : 'bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100'
+ }`}
+ >
+ <span>حالات خاصة</span>
+ <span className="px-1.5 py-0.2 bg-amber-200/70 text-amber-950 rounded-md text-[10px] font-black">
+ {safeStudents.filter(s => s.isSpecialCase).length}
+ </span>
+ </button>
+ {safeGrades.map((g) => {
+ const count = safeStudents.filter(s => (s.grade || '').includes(g.name)).length;
+ return (
+ <button
+ key={g.id || g.name}
+ onClick={() => setSelectedGradeFilter(selectedGradeFilter === g.name ? 'all' : g.name)}
+ className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-all cursor-pointer ${
+ selectedGradeFilter === g.name
+ ? 'bg-[#0284C7] text-white shadow-xs'
+ : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+ }`}
+ >
+ {isAr ? g.name : (g.nameEn || g.name)} ({count})
+ </button>
+ );
+ })}
+ </div>
+ )}
+ </div>
+
+ {/* STUDENTS ROSTER - GROUPED BY GRADE CARDS */}
+ {activeTab === 'students' && (() => {
+ // Global set to track rendered family cards across ALL grades (prevents duplicate family cards!)
+ const globalRenderedPhones = new Set();
+
+ // Group filtered students by grade
+ const studentsByGrade = filteredStudents.reduce((acc, stu) => {
+ const g = stu.grade || (isAr ? 'الصف الأول الابتدائي' : 'Grade 1');
+ if (!acc[g]) acc[g] = [];
+ acc[g].push(stu);
+ return acc;
+ }, {});
+
+ const gradeKeys = Object.keys(studentsByGrade);
+ if (gradeKeys.length === 0) {
+ return (
+ <div className="bg-white border border-[#E2E8F0] rounded-3xl p-10 text-center text-slate-400 space-y-2">
+ <Users className="w-12 h-12 mx-auto opacity-30 text-[#0284C7]" />
+ <p className="text-sm font-bold">{isAr ? 'لا يوجد طلاب مطابقون لخيارات البحث حالياً.' : 'No students found matching filters.'}</p>
+ </div>
+ );
+ }
+
+ return (
+ <div className="space-y-8">
+ {gradeKeys.map((gradeName) => {
+ const gradeStudents = studentsByGrade[gradeName];
+ if (!gradeStudents || gradeStudents.length === 0) return null;
+
+ return (
+ <div key={gradeName} className="space-y-4">
+ {/* Grade Divider Title */}
+ <div className="flex items-center gap-3 border-b border-[#0284C7]/20 pb-2">
+ <span className="w-2.5 h-6 bg-[#0284C7] rounded-full block" />
+ <h3 className="text-sm font-extrabold text-[#0284C7] flex items-center gap-2">
+ <span>{gradeName}</span>
+ <span className="bg-sky-50 text-[#0284C7] text-[10px] px-2 py-0.5 rounded-full font-black border border-sky-200">
+ {gradeStudents.length} {isAr ? 'طلاب' : 'Students'}
+ </span>
+ </h3>
+ </div>
+
+            {/* Student Roster Table View (10% Compact Font Size) */}
+            <div className="bg-white border border-[#E2E8F0] rounded-2xl overflow-hidden shadow-xs">
+              <div className="overflow-x-auto">
+                <table className="w-full text-right rtl:text-right ltr:text-left text-[10px]">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-500 bg-[#F8FAFC]">
+                      <th className="px-3 py-2 font-extrabold text-[10px]">{isAr ? 'اسم ولي الأمر والعائلة' : 'Parent & Family'}</th>
+                      <th className="px-3 py-2 font-extrabold text-[10px]">{isAr ? 'الصف والشعبة' : 'Grade & Section'}</th>
+                      <th className="px-3 py-2 font-extrabold text-[10px]">{isAr ? 'رقم الهاتف' : 'Phone'}</th>
+                      <th className="px-3 py-2 font-extrabold text-[10px]">{isAr ? 'المتبقي للمدرسة' : 'Remaining Dues'}</th>
+                      <th className="px-3 py-2 font-extrabold text-center text-[10px]">{isAr ? 'التفاصيل والمعاينة' : 'Details'}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-sans">
+                    {(() => {
+                      const renderedFamilyKeysInGrade = new Set();
+
+                      return gradeStudents.map((primaryStu) => {
+                        const familyKey = getFamilyKey(primaryStu);
+                        if (renderedFamilyKeysInGrade.has(familyKey)) return null;
+                        renderedFamilyKeysInGrade.add(familyKey);
+
+                        const familyMembers = gradeStudents.filter(s => getFamilyKey(s) === familyKey);
+                        const isMulti = familyMembers.length > 1;
+                        const isFamilySpecialCase = familyMembers.some(s => s.isSpecialCase);
+
+                        const parentDisplayName = (primaryStu.parentName && primaryStu.parentName.trim() !== '' && primaryStu.parentName !== 'غير محدد')
+                          ? primaryStu.parentName
+                          : `عائلة ${primaryStu.name.split(' ').slice(-1)[0]}`;
+
+                        const cleanSec = (primaryStu.classRoom || 'أ').toString().replace(/الشعبة/g, '').replace(/[\(\)]/g, '').trim() || 'أ';
+                        const isFrozen = Boolean(primaryStu.frozen);
+
+                        return (
+                          <tr 
+                            key={primaryStu.id}
+                            onClick={() => setShowStudentDetailModal(primaryStu)}
+                            className={`transition-colors cursor-pointer group ${
+                              isFrozen ? 'bg-red-50/70 hover:bg-red-100/70' : isMulti ? 'bg-amber-50/30 hover:bg-amber-100/40' : 'hover:bg-sky-50/60'
+                            }`}
+                            title="اضغط لمعاينة كافة التفاصيل"
+                          >
+                            {/* Parent Name & Children Details Inside */}
+                            <td className="px-3 py-2">
+                              <div className="flex items-center gap-2">
+                                <div className={`w-7 h-7 rounded-lg font-black text-[10px] flex items-center justify-center shrink-0 shadow-2xs ${
+                                  isFrozen ? 'bg-red-600 text-white' : isMulti ? 'bg-amber-500 text-white' : 'bg-[#0284C7] text-white'
+                                }`}>
+                                  {isMulti ? '👨‍وا' : (primaryStu.name || 'ط')[0]}
+                                </div>
+                                <div>
+                                  {/* Parent Name Header */}
+                                  <div className="flex items-center gap-1 font-black text-[#0F172A] text-[11px]">
+                                    <span>{parentDisplayName}</span>
+                                    {isMulti && (
+                                      <span className="px-1.5 py-0.2 bg-amber-100 text-amber-800 border border-amber-300 rounded-full text-[7.5px] font-black">
+                                        ({familyMembers.length} إخوة)
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {/* Children Names Directly Inside */}
+                                  <div className="text-[9px] text-slate-500 font-bold mt-0.5 flex items-center gap-1 flex-wrap">
+                                    {familyMembers.map((sib, idx) => (
+                                      <React.Fragment key={sib.id}>
+                                        {idx > 0 && <span className="text-slate-300 font-bold">•</span>}
+                                        <span 
+                                          onClick={(e) => { e.stopPropagation(); setShowStudentDetailModal(sib); }}
+                                          className="text-slate-700 hover:text-[#0284C7] transition-colors cursor-pointer font-extrabold"
+                                        >
+                                          {isAr ? sib.name : sib.nameEn}
+                                          {(sib.isSpecialCase || isFamilySpecialCase) && (
+                                            <span className="text-amber-500 font-bold text-[9px] ml-0.5" title="حالة خاصة">⭐</span>
+                                          )}
+                                        </span>
+                                      </React.Fragment>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* Grade & Section */}
+                            <td className="px-3 py-2 font-bold text-slate-600 text-[10px] whitespace-nowrap">
+                              {isMulti ? (
+                                <div className="space-y-0.5 text-[9px]">
+                                  {familyMembers.map(s => {
+                                    const sSec = (s.classRoom || 'أ').toString().replace(/الشعبة/g, '').replace(/[\(\)]/g, '').trim() || 'أ';
+                                    return <div key={s.id}>{s.name.split(' ')[0]}: {s.grade} (شعبة {sSec})</div>;
+                                  })}
+                                </div>
+                              ) : (
+                                `${primaryStu.grade} (شعبة ${cleanSec})`
+                              )}
+                            </td>
+
+                            {/* Phone */}
+                            <td className="px-3 py-2 font-mono text-slate-600 font-bold dir-ltr text-right text-[10px]">
+                              {primaryStu.parentPhone || primaryStu.phone || 'غير مسجل'}
+                            </td>
+
+                            {/* Remaining Tuition */}
+                            <td className="px-3 py-2 font-mono font-black text-[10px]">
+                              {(isFamilySpecialCase || primaryStu.isSpecialCase) ? (
+                                <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-300 font-extrabold text-[9px] inline-flex items-center gap-0.5">
+                                  ⭐ $0 USD (حالة خاصة)
+                                </span>
+                              ) : (
+                                <span className="text-red-600 font-bold">
+                                  ${familyMembers.reduce((sum, s) => sum + Math.max(0, (Number(s.tuitionTotal) || 0) + (Number(s.adminFees) || 0) - (Number(s.tuitionDiscount) || 0) - (Number(s.tuitionPaid) || 0)), 0)} USD
+                                </span>
+                              )}
+                            </td>
+
+                            {/* Action Button */}
+                            <td className="px-3 py-2 text-center">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setShowStudentDetailModal(primaryStu); }}
+                                className="px-2 py-0.5 bg-sky-50 hover:bg-sky-100 text-[#0284C7] rounded-md font-bold text-[9px] inline-flex items-center gap-0.5 transition-all cursor-pointer border border-sky-200"
+                              >
+                                <Eye className="w-3 h-3" />
+                                <span>التفاصيل</span>
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      });
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+})()}
+
+ {/* TEACHERS TABLE ROSTER */}
+ {activeTab === 'teachers' && (
+ <div className="bg-white border border-[#E2E8F0] rounded-3xl p-6 shadow-sm space-y-4">
+ <div className="overflow-x-auto">
+ <table className="w-full text-right rtl:text-right ltr:text-left text-xs">
+ <thead>
+ <tr className="border-b border-slate-200 text-slate-500 bg-[#F8FAFC]">
+ <th className="p-3 font-semibold">{t('teacherName')}</th>
+ <th className="p-3 font-semibold">{t('username')}</th>
+ <th className="p-3 font-semibold">{isAr ? 'المواد التي يدرسها' : 'Assigned Subjects'}</th>
+ <th className="p-3 font-semibold">{isAr ? 'الصفوف والشُعب الموكلة' : 'Assigned Classrooms'}</th>
+ <th className="p-3 font-semibold">{t('monthlySalary')} ($ USD)</th>
+ <th className="p-3 font-semibold text-center">{t('actions')}</th>
+ </tr>
+ </thead>
+ <tbody className="divide-y divide-slate-100 text-[#0F172A]">
+ {filteredTeachers.length === 0 ? (
+ <tr>
+ <td colSpan={6} className="text-center py-6 text-xs text-slate-400">
+ {isAr ? 'لا يوجد معلمون مضافون حالياً. اضغط على "+ إضافة معلم جديد" للبدء!' : 'No teachers found.'}
+ </td>
+ </tr>
+ ) : (
+ filteredTeachers.map((tch) => {
+ const teacherSubjectsList = tch.subjects || [tch.subject];
+ const teacherClassesList = tch.assignedClassrooms || [];
+
+ return (
+ <tr key={tch.id} className="hover:bg-[#F8FAFC] transition-all">
+ <td className="p-3 font-bold flex items-center gap-2">
+ <div className="w-9 h-9 rounded-full font-black text-xs bg-[#0284C7]/10 text-[#0284C7] border border-[#0284C7] flex items-center justify-center shrink-0">
+ {(tch.name || 'م')[0]}
+ </div>
+ <div>
+ <div>{isAr ? tch.name : tch.nameEn}</div>
+ <div className="text-[10px] text-slate-400 font-mono">ID: {tch.id}</div>
+ </div>
+ </td>
+ <td className="p-3 font-mono text-[#0284C7] font-bold">
+ <div>{tch.username}</div>
+ <div className="text-[10px] text-red-600 font-extrabold">{tch.password}</div>
+ </td>
+ <td className="p-3">
+ <div className="flex flex-wrap gap-1">
+ {teacherSubjectsList.map((subName, i) => (
+ <SubjectBadge key={i} subjectName={subName} />
+ ))}
+ </div>
+ </td>
+ <td className="p-3">
+ {teacherClassesList.length === 0 ? (
+ <span className="text-[11px] text-slate-400 italic">{isAr ? 'غير محدد' : 'None'}</span>
+ ) : (
+ <div className="flex flex-wrap gap-1">
+ {teacherClassesList.map((clsLabel, idx) => (
+ <span key={idx} className="px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-[10px] font-bold">
+ {clsLabel}
+ </span>
+ ))}
+ </div>
+ )}
+ </td>
+ <td className="p-3 font-mono font-bold text-[#0284C7]">${tch.monthlySalary} USD</td>
+ <td className="p-3 flex items-center justify-center gap-1.5">
+ {currentRole === 'admin' && (
+ <button
+ onClick={() => setShowEditTeacherModal(tch)}
+ className="p-1.5 bg-sky-50 hover:bg-sky-100 text-[#0284C7] rounded-lg cursor-pointer"
+ title={isAr ? 'تعديل المواد والصفوف' : 'Edit Subjects & Classes'}
+ >
+ <Edit3 className="w-3.5 h-3.5" />
+ </button>
+ )}
+
+ <button
+ onClick={() => setShowSendLessonModal(tch)}
+ className="btn-mustard flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-bold shadow cursor-pointer"
+ title="إرسال درس وواجب بيتي للطلاب"
+ >
+ <Send className="w-3.5 h-3.5" />
+ <span>{isAr ? 'درس ' : 'Lesson'}</span>
+ </button>
+
+ {currentRole === 'admin' && (
+ <button
+ onClick={() => deleteTeacher(tch.id)}
+ className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg cursor-pointer"
+ title={t('delete')}
+ >
+ <Trash2 className="w-3.5 h-3.5" />
+ </button>
+ )}
+ </td>
+ </tr>
+ );
+ })
+ )}
+ </tbody>
+ <tfoot className="border-t-2 border-[#0284C7] bg-[#F8FAFC]">
+ <tr className="font-extrabold text-xs text-[#0F172A]">
+ <td colSpan={4} className="p-3 text-right text-slate-700">
+ <span>مجموع الرواتب الشهري لكادر المعلمين:</span>
+ </td>
+ <td className="p-3 font-mono font-black text-[#0284C7] text-sm">
+ ${(filteredTeachers || []).reduce((sum, t) => sum + (Number(t.monthlySalary) || 1200), 0).toLocaleString()} USD
+ </td>
+ <td></td>
+ </tr>
+ </tfoot>
+ </table>
+ </div>
+ </div>
+ )}
+
+ {/* Add Student Modal - Portal to document.body */}
+ {showAddStudentModal && createPortal(
+ <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[99999] flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
+ <form
+ onSubmit={handleAddStudentSubmit}
+ className="bg-white border-2 border-[#0284C7] rounded-3xl p-6 max-w-4xl w-full space-y-4 shadow-2xl animate-scale-up text-[#0F172A] relative max-h-[85vh] overflow-y-auto custom-scrollbar"
+ >
+ <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+ <h3 className="text-base font-bold text-[#0284C7] flex items-center gap-2">
+ <UserPlus className="w-5 h-5 text-[#0284C7]" />
+ <span>{isAr ? 'إضافة طالب جديد' : 'Add New Student'}</span>
+ </h3>
+ <button 
+ type="button" 
+ onClick={() => setShowAddStudentModal(false)} 
+ className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs transition-colors cursor-pointer"
+ >
+ </button>
+ </div>
+
+
+
+ {/* 3 Dedicated Name Fields: First Name, Father Name, Family/Surname */}
+ <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{isAr ? 'اسم التلميذ(ة)' : 'First Name'} <span className="text-red-500">*</span></label>
+ <input 
+ type="text" 
+ required 
+ value={stuFirstName} 
+ onChange={(e) => {
+ const fn = e.target.value;
+ setStuFirstName(fn);
+ setStuName(`${fn} ${stuFatherName} ${stuLastName}`.trim());
+ const genUser = generateArabicUsername(fn, stuFatherName, stuLastName);
+ if (genUser) setStuUsername(genUser);
+ }} 
+ placeholder={isAr ? "مثال: أحمد..." : "e.g. Ahmed"} 
+ className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-[#0284C7]" 
+ />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{isAr ? 'اسم الأب' : "Father's Name"} <span className="text-red-500">*</span></label>
+ <input 
+ type="text" 
+ required 
+ value={stuFatherName} 
+ onChange={(e) => {
+ const mn = e.target.value;
+ setStuFatherName(mn);
+ setStuName(`${stuFirstName} ${mn} ${stuLastName}`.trim());
+ setStuParentName(`${mn} ${stuLastName}`.trim());
+ const genUser = generateArabicUsername(stuFirstName, mn, stuLastName);
+ if (genUser) setStuUsername(genUser);
+ }} 
+ placeholder={isAr ? "مثال: محمد..." : "e.g. Mohamed"} 
+ className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-[#0284C7]" 
+ />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{isAr ? 'الكنية / العائلة' : 'Surname / Family'} <span className="text-red-500">*</span></label>
+ <input 
+ type="text" 
+ required 
+ value={stuLastName} 
+ onChange={(e) => {
+ const ln = e.target.value;
+ setStuLastName(ln);
+ setStuName(`${stuFirstName} ${stuFatherName} ${ln}`.trim());
+ setStuParentName(`${stuFatherName} ${ln}`.trim());
+ const genUser = generateArabicUsername(stuFirstName, stuFatherName, ln);
+ if (genUser) setStuUsername(genUser);
+ }} 
+ placeholder={isAr ? "مثال: مسرة..." : "e.g. Masarra"} 
+ className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-[#0284C7]" 
+ />
+ </div>
+ </div>
+
+ {/* Parent Name & Phone Number */}
+ <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{isAr ? 'اسم ولي الأمر' : 'Parent Name'}</label>
+ <input type="text" value={stuParentName} onChange={(e) => setStuParentName(e.target.value)} placeholder="مثال: محمد علي الخالد..." className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-[#0284C7]" />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{isAr ? 'هاتف الأب / ولي الأمر' : 'Father Phone'}</label>
+ <input type="text" value={stuParentPhone} onChange={(e) => setStuParentPhone(e.target.value)} placeholder="+961 70 123 456..." className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-[#0284C7]" />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{isAr ? 'هاتف الأم' : "Mother's Phone"}</label>
+ <input type="text" value={stuMotherPhone} onChange={(e) => setStuMotherPhone(e.target.value)} placeholder="+961 70 999 888..." className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-[#0284C7]" />
+ </div>
+ </div>
+
+ {/* Ministry Endorsement Clearance Number (Optional) */}
+ <div className="space-y-1 text-right">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5 justify-end">
+ <Bookmark className="w-4 h-4 text-amber-500 fill-amber-500" />
+ <span>{isAr ? 'رقم الإفادة المعتمد من الوزارة (اختياري - فريد)' : 'Ministry Clearance Reference No. (Unique - Optional)'}</span>
+ </label>
+ <input 
+ type="text" 
+ value={stuMinistryClearance} 
+ onChange={(e) => setStuMinistryClearance(e.target.value)} 
+ placeholder={isAr ? "أدخل رقم الإفادة الوزارية الرسمي..." : "Enter unique Ministry clearance reference code..."} 
+ className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-amber-500 text-right" 
+ />
+ </div>
+
+ <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{t('username')} <span className="text-red-500">*</span></label>
+ <input type="text" required value={stuUsername} onChange={(e) => setStuUsername(e.target.value)} placeholder="ahmed.2026..." className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-[#0284C7]" />
+ </div>
+
+ <div className="space-y-1">
+ <div className="flex items-center justify-between">
+ <label className="text-xs font-semibold text-slate-700">{t('password')}</label>
+ <button type="button" onClick={handleRegenerateStuPassword} className="text-[10px] text-[#0284C7] font-bold flex items-center gap-1 cursor-pointer">
+ <RefreshCw className="w-3 h-3" />
+ <span>{isAr ? 'توليد جديد' : 'Generate'}</span>
+ </button>
+ </div>
+ <input type="text" required value={stuPassword} onChange={(e) => setStuPassword(e.target.value)} className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-red-600 font-extrabold rounded-xl px-3 py-2 text-xs font-mono focus:outline-none" />
+ </div>
+ </div>
+
+ {/* Dynamic Grades, Classrooms & Financial Fees Select */}
+ <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{t('grade')}</label>
+ <select
+ value={stuGrade}
+ onChange={(e) => {
+ setStuGrade(e.target.value);
+ const foundGrd = safeGrades.find((g) => g.name === e.target.value);
+ if (foundGrd) {
+ setStuGradeEn(foundGrd.nameEn || e.target.value);
+ if (foundGrd.tuitionFee) {
+ setStuTuitionTotal(foundGrd.tuitionFee.toString());
+ }
+ }
+ }}
+ className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs focus:outline-none cursor-pointer font-bold"
+ >
+ {safeGrades.length === 0 ? (
+ <option value="الصف الأول الابتدائي">الصف الأول الابتدائي</option>
+ ) : (
+ safeGrades.map((g) => (
+ <option key={g.id} value={g.name}>
+ {isAr ? g.name : g.nameEn}
+ </option>
+ ))
+ )}
+ </select>
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{isAr ? 'الشعبة' : 'Classroom'}</label>
+ <select
+ value={stuClassRoom}
+ onChange={(e) => setStuClassRoom(e.target.value)}
+ className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs focus:outline-none cursor-pointer font-bold"
+ >
+ {getClassroomsForGrade(stuGrade).length === 0 ? (
+ <>
+ <option value="أ">الشعبة (أ)</option>
+ <option value="ب">الشعبة (ب)</option>
+ <option value="ج">الشعبة (ج)</option>
+ </>
+ ) : (
+ getClassroomsForGrade(stuGrade).map((c) => {
+ const secLabel = c.sectionName ? (c.sectionName.startsWith('الشعبة') ? c.sectionName : `الشعبة (${c.sectionName})`) : (c.sectionNameEn || 'أ');
+ return (
+ <option key={c.id} value={c.sectionName}>
+ {secLabel}
+ </option>
+ );
+ })
+ )}
+ </select>
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{t('totalTuition')} ($ USD)</label>
+ <input type="number" value={stuTuitionTotal} onChange={(e) => setStuTuitionTotal(e.target.value)} className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] font-mono rounded-xl px-3 py-2 text-xs focus:outline-none" />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{isAr ? 'الخصومات ($ USD)' : 'Discount ($ USD)'}</label>
+ <input type="number" value={stuTuitionDiscount} onChange={(e) => setStuTuitionDiscount(e.target.value)} className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-emerald-600 font-mono rounded-xl px-3 py-2 text-xs focus:outline-none" />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{isAr ? 'المصاريف الإدارية ($ USD)' : 'Admin Fees ($ USD)'}</label>
+ <input type="number" value={stuAdminFees} onChange={(e) => setStuAdminFees(e.target.value)} className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-amber-600 font-mono rounded-xl px-3 py-2 text-xs focus:outline-none" />
+ </div>
+ </div>
+
+ {/* Transport Subscription Checkbox & Amount Panel */}
+ <div className="bg-sky-50/80 border-2 border-sky-200 p-3.5 rounded-2xl text-right space-y-2">
+ <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+ <label htmlFor="stuHasTransportCheck" className="text-xs font-black text-[#0284C7] cursor-pointer flex items-center gap-2">
+ <input
+ type="checkbox"
+ id="stuHasTransportCheck"
+ checked={stuHasTransport}
+ onChange={(e) => {
+ const checked = e.target.checked;
+ setStuHasTransport(checked);
+ if (!checked) {
+ setStuTransportFee('0');
+ } else if (stuTransportFee === '0' || !stuTransportFee) {
+ setStuTransportFee('150');
+ }
+ }}
+ className="w-4.5 h-4.5 accent-[#0284C7] rounded cursor-pointer"
+ />
+ <span>{isAr ? ' الاشتراك في خدمة النقل والمواصلات المدرسية (يظهر الطالب في صفحة النقل)' : ' Subscribe to Bus Transport (Student appears in Transport page)'}</span>
+ </label>
+
+ {stuHasTransport && (
+ <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-sky-300 shadow-xs">
+ <label className="text-xs font-black text-slate-700 shrink-0">{isAr ? 'الرسوم الشهرية للنقل:' : 'Monthly Fee:'}</label>
+ <div className="relative w-32">
+ <input
+ type="number"
+ required={stuHasTransport}
+ value={stuTransportFee}
+ onChange={(e) => setStuTransportFee(e.target.value)}
+ placeholder="50"
+ className="w-full bg-[#F8FAFC] border border-[#0284C7] text-[#0284C7] font-mono font-black rounded-lg pr-2 pl-12 py-1 text-xs text-center focus:outline-none"
+ />
+ <span className="absolute left-1 top-1 text-[9px] font-black text-slate-500">$/شهرياً</span>
+ </div>
+ </div>
+ )}
+ </div>
+ </div>
+
+ {/* Special Case Classification Checkbox */}
+ <div className="flex items-center justify-end gap-2 bg-amber-50/80 p-3 rounded-2xl border border-amber-200 text-right">
+ <label htmlFor="stuIsSpecialCase" className="text-xs font-black text-amber-900 cursor-pointer flex items-center gap-2">
+ <span>{isAr ? 'تصنيف الطالب ضمن «حالات خاصة»' : 'Classify as Special Case'}</span>
+ <input
+ type="checkbox"
+ id="stuIsSpecialCase"
+ checked={stuIsSpecialCase}
+ onChange={(e) => {
+ const checked = e.target.checked;
+ setStuIsSpecialCase(checked);
+ if (checked) {
+ setStuTuitionTotal('0');
+ } else {
+ setStuTuitionTotal((safeGrades[0]?.tuitionFee || 1500).toString());
+ }
+ }}
+ className="w-4 h-4 accent-amber-600 rounded cursor-pointer"
+ />
+ </label>
+ </div>
+
+ {/* Dynamic Sibling Addition Section */}
+ <div className="pt-3 border-t border-slate-100 space-y-3 text-right">
+ <button
+ type="button"
+ onClick={addSiblingRow}
+ className="w-full py-2 bg-sky-50 dark:bg-sky-950/20 hover:bg-sky-100 text-[#0284C7] dark:text-sky-400 border border-dashed border-[#0284C7]/30 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+ >
+ <span> {isAr ? 'إضافة أخ / أخت (تلميذ إضافي لنفس ولي الأمر)' : 'Add Brother/Sister (Additional Sibling Student)'}</span>
+ </button>
+
+ {siblingsList.length > 0 && (
+ <div className="space-y-3 p-3 rounded-2xl border border-sky-100 bg-sky-50/10 dark:bg-sky-950/5 text-right">
+ <h4 className="text-xs font-black text-[#0284C7] flex items-center gap-1.5 justify-end">
+ <span>{isAr ? 'بيانات الإخوة الإضافيين المضافين للطلب:' : 'Additional Siblings Details:'}</span>
+ </h4>
+ 
+ {siblingsList.map((sib, index) => (
+ <div key={sib.id} className="relative p-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl space-y-3 shadow-xs">
+ {/* Header with remove button */}
+ <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+ <button
+ type="button"
+ onClick={() => removeSiblingRow(sib.id)}
+ className="text-[10px] font-bold text-red-500 hover:text-red-700 cursor-pointer"
+ >
+ {isAr ? 'حذف هذا الأخ ' : 'Remove Sibling'}
+ </button>
+ <span className="text-[10px] font-black text-slate-500">{isAr ? `الأخ المضاف #${index + 1}` : `Sibling #${index + 1}`}</span>
+ </div>
+ 
+ <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-right">
+ <div className="space-y-1">
+ <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300">{isAr ? 'اسم الأخ/الأخت (الاسم الأول) *' : 'Sibling First Name *'}</label>
+ <input 
+ type="text" 
+ required 
+ value={sib.name} 
+ onChange={(e) => updateSiblingField(index, 'name', e.target.value)} 
+ placeholder={isAr ? "مثال: يوسف..." : "e.g. Youssef"} 
+ className="w-full bg-[#F8FAFC] dark:bg-slate-950 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white rounded-xl px-2.5 py-1.5 text-xs focus:outline-none focus:border-[#0284C7] text-right" 
+ />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300">{isAr ? 'الصف الدراسي الخاص بهذا الأخ ' : 'Sibling Grade'}</label>
+ <select
+ value={sib.grade}
+ onChange={(e) => updateSiblingField(index, 'grade', e.target.value)}
+ className="w-full bg-[#F8FAFC] dark:bg-slate-950 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white rounded-xl px-2.5 py-1.5 text-xs focus:outline-none cursor-pointer font-bold"
+ >
+ {safeGrades.map((g) => (
+ <option key={g.id} value={g.name}>
+ {isAr ? g.name : g.nameEn}
+ </option>
+ ))}
+ </select>
+ </div>
+ 
+ <div className="space-y-1">
+ <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300">{isAr ? 'الشعبة الخاصة بهذا الأخ ' : 'Sibling Classroom'}</label>
+ <select
+ value={sib.classRoom}
+ onChange={(e) => updateSiblingField(index, 'classRoom', e.target.value)}
+ className="w-full bg-[#F8FAFC] dark:bg-slate-950 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white rounded-xl px-2.5 py-1.5 text-xs focus:outline-none cursor-pointer font-bold"
+ >
+ {getClassroomsForGrade(sib.grade).length === 0 ? (
+ <>
+ <option value="أ">الشعبة (أ)</option>
+ <option value="ب">الشعبة (ب)</option>
+ <option value="ج">الشعبة (ج)</option>
+ </>
+ ) : (
+ getClassroomsForGrade(sib.grade).map((c) => {
+ const secLabel = c.sectionName ? (c.sectionName.startsWith('الشعبة') ? c.sectionName : `الشعبة (${c.sectionName})`) : (c.sectionNameEn || 'أ');
+ return (
+ <option key={c.id} value={c.sectionName}>
+ {secLabel}
+ </option>
+ );
+ })
+ )}
+ </select>
+ </div>
+ </div>
+
+ <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-right">
+ <div className="space-y-1">
+ <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300">{t('totalTuition')} ($ USD)</label>
+ <input 
+ type="number" 
+ value={sib.tuitionTotal} 
+ onChange={(e) => updateSiblingField(index, 'tuitionTotal', e.target.value)} 
+ className="w-full bg-[#F8FAFC] dark:bg-slate-950 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white font-mono rounded-xl px-2.5 py-1.5 text-xs focus:outline-none text-right" 
+ />
+ </div>
+ 
+ <div className="space-y-1">
+ <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300">{isAr ? 'الخصومات ($ USD)' : 'Discount ($ USD)'}</label>
+ <input 
+ type="number" 
+ value={sib.tuitionDiscount} 
+ onChange={(e) => updateSiblingField(index, 'tuitionDiscount', e.target.value)} 
+ className="w-full bg-[#F8FAFC] dark:bg-slate-950 border border-[#E2E8F0] dark:border-slate-800 text-emerald-600 font-mono rounded-xl px-2.5 py-1.5 text-xs focus:outline-none text-right" 
+ />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300">{isAr ? 'المصاريف الإدارية ($ USD)' : 'Admin Fees ($ USD)'}</label>
+ <input 
+ type="number" 
+ value={sib.adminFees || '0'} 
+ onChange={(e) => updateSiblingField(index, 'adminFees', e.target.value)} 
+ className="w-full bg-[#F8FAFC] dark:bg-slate-950 border border-[#E2E8F0] dark:border-slate-800 text-amber-600 font-mono rounded-xl px-2.5 py-1.5 text-xs focus:outline-none text-right" 
+ />
+ </div>
+ 
+ <div className="space-y-1">
+ <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300">{isAr ? 'رقم إفادة الوزارة' : 'Clearance No.'}</label>
+ <input 
+ type="text" 
+ value={sib.ministryClearance} 
+ onChange={(e) => updateSiblingField(index, 'ministryClearance', e.target.value)} 
+ placeholder={isAr ? "رقم إفادة فريد..." : "Unique clearance..."}
+ className="w-full bg-[#F8FAFC] dark:bg-slate-950 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white font-mono rounded-xl px-2.5 py-1.5 text-xs focus:outline-none text-right" 
+ />
+ </div>
+ </div>
+
+ <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-slate-100 dark:border-slate-800 text-right">
+ <div className="space-y-0.5">
+ <span className="text-[9px] text-slate-500 block">{t('username')}</span>
+ <input 
+ type="text" 
+ required 
+ value={sib.username} 
+ onChange={(e) => updateSiblingField(index, 'username', e.target.value)} 
+ className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-100 dark:border-slate-800 text-[#0F172A] dark:text-white font-mono rounded-lg px-2 py-1 text-[11px] focus:outline-none text-right" 
+ />
+ </div>
+ <div className="space-y-0.5">
+ <span className="text-[9px] text-slate-500 block">{t('password')}</span>
+ <input 
+ type="text" 
+ required 
+ value={sib.password} 
+ onChange={(e) => updateSiblingField(index, 'password', e.target.value)} 
+ className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-100 dark:border-slate-800 text-red-500 font-bold font-mono rounded-lg px-2 py-1 text-[11px] focus:outline-none text-right" 
+ />
+ </div>
+ </div>
+ </div>
+ ))}
+ </div>
+ )}
+
+ {/* Combined Family Tuition Panel */}
+ <div className="p-4 bg-sky-50/50 dark:bg-sky-950/20 border-2 border-sky-200 dark:border-sky-900 rounded-2xl flex items-center justify-between text-right">
+ <div className="flex items-center gap-2">
+ <span className="text-xl"></span>
+ <div>
+ <h4 className="text-xs font-black text-slate-700 dark:text-slate-300">{isAr ? 'الحساب المالي المجمع للمسجلين:' : 'Total Family Tuition:'}</h4>
+ <p className="text-[10px] text-slate-500 font-bold">{isAr ? `طالب رئيسي + ${siblingsList.length} إخوة` : `1 Primary + ${siblingsList.length} Siblings`}</p>
+ </div>
+ </div>
+ <div className="text-left font-mono">
+ <span className="text-sm font-black text-[#0284C7] dark:text-sky-400 block" title={isAr ? 'إجمالي الأقساط' : 'Total Tuition'}>
+ {isAr ? 'القسط:' : 'Tuition:'} ${(Number(stuTuitionTotal || 0) + siblingsList.reduce((acc, s) => acc + Number(s.tuitionTotal || 0), 0))} USD
+ </span>
+ <span className="text-[10px] text-sky-600 font-extrabold block" title={isAr ? 'رسوم النقل والمواصلات' : 'Transport Fees'}>
+ {isAr ? 'رسوم النقل :' : 'Transport:'} +${(Number(stuTransportFee || 0) + siblingsList.reduce((acc, s) => acc + Number(s.transportFee || 0), 0))} USD
+ </span>
+ <span className="text-[10px] text-amber-600 font-extrabold block" title={isAr ? 'إجمالي المصاريف الإدارية' : 'Total Admin Fees'}>
+ {isAr ? 'المصاريف الإدارية:' : 'Admin Fees:'} +${(Number(stuAdminFees || 0) + siblingsList.reduce((acc, s) => acc + Number(s.adminFees || 0), 0))} USD
+ </span>
+ <span className="text-[10px] text-emerald-600 font-extrabold block">
+ {isAr ? 'الخصم الإجمالي:' : 'Total Discount:'} -${(Number(stuTuitionDiscount || 0) + siblingsList.reduce((acc, s) => acc + Number(s.tuitionDiscount || 0), 0))} USD
+ </span>
+ <span className="text-xs font-black text-slate-800 dark:text-slate-200 border-t border-slate-200 dark:border-slate-800 pt-0.5 block">
+ {isAr ? 'صافي المبلغ المطلوب:' : 'Net Total:'} ${(Number(stuTuitionTotal || 0) + siblingsList.reduce((acc, s) => acc + Number(s.tuitionTotal || 0), 0)) + (Number(stuTransportFee || 0) + siblingsList.reduce((acc, s) => acc + Number(s.transportFee || 0), 0)) + (Number(stuAdminFees || 0) + siblingsList.reduce((acc, s) => acc + Number(s.adminFees || 0), 0)) - (Number(stuTuitionDiscount || 0) + siblingsList.reduce((acc, s) => acc + Number(s.tuitionDiscount || 0), 0))} USD
+ </span>
+ </div>
+ </div>
+ </div>
+
+ <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+ <button type="button" onClick={() => setShowAddStudentModal(false)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold cursor-pointer">{t('cancel')}</button>
+ <button type="submit" className="px-5 py-2 btn-mustard rounded-xl text-xs font-bold shadow cursor-pointer">{t('save')}</button>
+ </div>
+ </form>
+ </div>,
+ document.body
+ )}
+
+ {/* Add Teacher Modal with Multi-Subject & Multi-Classroom Support */}
+ {showAddTeacherModal && createPortal(
+ <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[99999] flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
+ <form
+ onSubmit={handleAddTeacherSubmit}
+ className="bg-white border-2 border-[#0284C7] rounded-3xl p-6 max-w-4xl w-full space-y-4 shadow-2xl animate-scale-up text-[#0F172A] relative max-h-[85vh] overflow-y-auto custom-scrollbar"
+ >
+ <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+ <h3 className="text-base font-bold text-[#0284C7] flex items-center gap-2">
+ <UserPlus className="w-5 h-5 text-[#0284C7]" />
+ <span>{isAr ? 'إضافة معلم جديد (المواد والصفوف الموكلة)' : 'Add Teacher'}</span>
+ </h3>
+ <button 
+ type="button" 
+ onClick={() => setShowAddTeacherModal(false)} 
+ className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs transition-colors cursor-pointer"
+ >
+ </button>
+ </div>
+
+
+
+ <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{isAr ? 'اسم المعلم الكامل' : 'Teacher Name'} <span className="text-red-500">*</span></label>
+ <input type="text" required value={tchName} onChange={(e) => setTchName(e.target.value)} placeholder="أ. مريم صالح..." className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-[#0284C7]" />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{isAr ? 'اسم المعلم (English)' : 'English Name'}</label>
+ <input type="text" value={tchNameEn} onChange={(e) => setTchNameEn(e.target.value)} placeholder="Maryam Saleh..." className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-[#0284C7]" />
+ </div>
+ </div>
+
+ <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{t('username')} <span className="text-red-500">*</span></label>
+ <input type="text" required value={tchUsername} onChange={(e) => setTchUsername(e.target.value)} placeholder="maryam.math..." className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-[#0284C7]" />
+ </div>
+
+ <div className="space-y-1">
+ <div className="flex items-center justify-between">
+ <label className="text-xs font-semibold text-slate-700">{t('password')}</label>
+ <button type="button" onClick={handleRegenerateTchPassword} className="text-[10px] text-[#0284C7] font-bold flex items-center gap-1 cursor-pointer">
+ <RefreshCw className="w-3 h-3" />
+ <span>{isAr ? 'توليد جديد' : 'Generate'}</span>
+ </button>
+ </div>
+ <input type="text" required value={tchPassword} onChange={(e) => setTchPassword(e.target.value)} className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-red-600 font-extrabold rounded-xl px-3 py-2 text-xs font-mono focus:outline-none" />
+ </div>
+ </div>
+
+ {/* MULTI-SUBJECT SELECTOR */}
+ <div className="space-y-2 bg-[#F8FAFC] p-4 rounded-2xl border border-[#E2E8F0]">
+ <label className="text-xs font-bold text-[#0284C7] flex items-center gap-1.5">
+ <BookOpen className="w-4 h-4 text-[#0284C7]" />
+ <span>{isAr ? 'اختر المواد التي يدرسها المعلم (أكثر من مادة):' : 'Select Assigned Subjects (Multiple):'}</span>
+ </label>
+
+ <div className="flex flex-wrap gap-2 pt-1">
+ {safeSubjects.map((sub) => {
+ const isChecked = tchSubjects.includes(sub.name);
+
+ return (
+ <button
+ key={sub.id}
+ type="button"
+ onClick={() => toggleSubjectSelect(sub.name, tchSubjects, setTchSubjects)}
+ className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border cursor-pointer ${
+ isChecked 
+ ? 'bg-[#0284C7] text-white border-[#0284C7] shadow-md scale-105' 
+ : 'bg-white text-slate-700 border-slate-200 hover:border-[#0284C7]'
+ }`}
+ >
+ <span>{sub.icon || ''}</span>
+ <span>{sub.name}</span>
+ {isChecked && <span></span>}
+ </button>
+ );
+ })}
+ </div>
+ </div>
+
+ {/* MULTI-CLASSROOM SELECTOR */}
+ <div className="space-y-2 bg-[#F8FAFC] p-4 rounded-2xl border border-[#E2E8F0]">
+ <label className="text-xs font-bold text-emerald-600 flex items-center gap-1.5">
+ <DoorOpen className="w-4 h-4 text-emerald-600" />
+ <span>{isAr ? 'اختر الصفوف والشعب الموكلة للمعلم (أكثر من شعبة):' : 'Select Assigned Classrooms (Multiple):'}</span>
+ </label>
+
+ <div className="flex flex-wrap gap-2 pt-1">
+ {safeClassrooms.length === 0 ? (
+ <p className="text-[11px] text-slate-400 italic">{isAr ? 'أضف صفوف وشعب أولاً من قسم (الصفوف والشعب).' : 'Add classrooms first.'}</p>
+ ) : (
+ safeClassrooms.map((cls) => {
+ const label = `${cls.gradeName} - ${cls.sectionName}`;
+ const isChecked = tchAssignedClasses.includes(label);
+
+ return (
+ <button
+ key={cls.id}
+ type="button"
+ onClick={() => toggleClassSelect(label, tchAssignedClasses, setTchAssignedClasses)}
+ className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border cursor-pointer ${
+ isChecked 
+ ? 'bg-emerald-600 text-white border-emerald-600 shadow-md scale-105' 
+ : 'bg-white text-slate-700 border-slate-200 hover:border-emerald-500'
+ }`}
+ >
+ <span></span>
+ <span>{label}</span>
+ {isChecked && <span></span>}
+ </button>
+ );
+ })
+ )}
+ </div>
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{t('monthlySalary')} ($ USD)</label>
+ <input type="number" value={tchSalary} onChange={(e) => setTchSalary(e.target.value)} className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] font-mono rounded-xl px-3 py-2 text-xs focus:outline-none" />
+ </div>
+
+ <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+ <button type="button" onClick={() => setShowAddTeacherModal(false)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold cursor-pointer">{t('cancel')}</button>
+ <button type="submit" className="px-5 py-2 btn-mustard rounded-xl text-xs font-bold shadow cursor-pointer">{t('save')}</button>
+ </div>
+ </form>
+ </div>,
+ document.body
+ )}
+
+ {/* Edit Teacher Modal for Assigning Multiple Subjects & Classes */}
+ {showEditTeacherModal && createPortal(
+ <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[99999] flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
+ <form
+ onSubmit={handleEditTeacherSubmit}
+ className="bg-white border-2 border-[#0284C7] rounded-3xl p-6 max-w-4xl w-full space-y-4 shadow-2xl animate-scale-up text-[#0F172A] relative max-h-[85vh] overflow-y-auto custom-scrollbar"
+ >
+ <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+ <h3 className="text-base font-bold text-[#0284C7] flex items-center gap-2">
+ <Edit3 className="w-5 h-5 text-[#0284C7]" />
+ <span>{isAr ? `تعديل مواد وصفوف المعلم: ${showEditTeacherModal.name}` : `Edit Teacher - ${showEditTeacherModal.nameEn}`}</span>
+ </h3>
+ <button 
+ type="button" 
+ onClick={() => setShowEditTeacherModal(null)} 
+ className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs transition-colors cursor-pointer"
+ >
+ </button>
+ </div>
+
+ {/* MULTI-SUBJECT SELECTOR */}
+ <div className="space-y-2 bg-[#F8FAFC] p-4 rounded-2xl border border-[#E2E8F0]">
+ <label className="text-xs font-bold text-[#0284C7] flex items-center gap-1.5">
+ <BookOpen className="w-4 h-4 text-[#0284C7]" />
+ <span>{isAr ? 'تحديث المواد التي يدرسها المعلم:' : 'Assigned Subjects:'}</span>
+ </label>
+
+ <div className="flex flex-wrap gap-2 pt-1">
+ {safeSubjects.map((sub) => {
+ const currentList = showEditTeacherModal.subjects || [showEditTeacherModal.subject];
+ const isChecked = currentList.includes(sub.name);
+
+ return (
+ <button
+ key={sub.id}
+ type="button"
+ onClick={() => {
+ const updated = isChecked 
+ ? currentList.filter((s) => s !== sub.name)
+ : [...currentList, sub.name];
+ setShowEditTeacherModal({
+ ...showEditTeacherModal,
+ subject: updated[0] || 'الرياضيات',
+ subjects: updated
+ });
+ }}
+ className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border cursor-pointer ${
+ isChecked 
+ ? 'bg-[#0284C7] text-white border-[#0284C7] shadow-md scale-105' 
+ : 'bg-white text-slate-700 border-slate-200 hover:border-[#0284C7]'
+ }`}
+ >
+ <span>{sub.icon || ''}</span>
+ <span>{sub.name}</span>
+ {isChecked && <span></span>}
+ </button>
+ );
+ })}
+ </div>
+ </div>
+
+ {/* MULTI-CLASSROOM SELECTOR */}
+ <div className="space-y-2 bg-[#F8FAFC] p-4 rounded-2xl border border-[#E2E8F0]">
+ <label className="text-xs font-bold text-emerald-600 flex items-center gap-1.5">
+ <DoorOpen className="w-4 h-4 text-emerald-600" />
+ <span>{isAr ? 'تحديث الصفوف والشعب الموكلة للمعلم:' : 'Assigned Classrooms:'}</span>
+ </label>
+
+ <div className="flex flex-wrap gap-2 pt-1">
+ {safeClassrooms.map((cls) => {
+ const label = `${cls.gradeName} - ${cls.sectionName}`;
+ const currentClasses = showEditTeacherModal.assignedClassrooms || [];
+ const isChecked = currentClasses.includes(label);
+
+ return (
+ <button
+ key={cls.id}
+ type="button"
+ onClick={() => {
+ const updated = isChecked
+ ? currentClasses.filter((c) => c !== label)
+ : [...currentClasses, label];
+ setShowEditTeacherModal({
+ ...showEditTeacherModal,
+ assignedClassrooms: updated
+ });
+ }}
+ className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border cursor-pointer ${
+ isChecked 
+ ? 'bg-emerald-600 text-white border-emerald-600 shadow-md scale-105' 
+ : 'bg-white text-slate-700 border-slate-200 hover:border-emerald-500'
+ }`}
+ >
+ <span></span>
+ <span>{label}</span>
+ {isChecked && <span></span>}
+ </button>
+ );
+ })}
+ </div>
+ </div>
+
+ <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+ <button type="button" onClick={() => setShowEditTeacherModal(null)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold cursor-pointer">{t('cancel')}</button>
+ <button type="submit" className="px-5 py-2 btn-mustard rounded-xl text-xs font-bold shadow cursor-pointer">{t('save')}</button>
+ </div>
+ </form>
+ </div>,
+ document.body
+ )}
+
+ {/* Send Lesson Modal - Portal to document.body */}
+ {showSendLessonModal && createPortal(
+ <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[99999] flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
+ <form
+ onSubmit={handleSendLessonSubmit}
+ className="bg-white border-2 border-[#0284C7] rounded-3xl p-6 max-w-lg w-full space-y-4 shadow-2xl animate-scale-up text-[#0F172A] relative"
+ >
+ <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+ <h3 className="text-base font-bold text-[#0284C7] flex items-center gap-2">
+ <Send className="w-5 h-5 text-[#0284C7]" />
+ <span>{isAr ? `إرسال درس وواجب بيتي - ${showSendLessonModal.name}` : `Send Lesson & Homework - ${showSendLessonModal.nameEn}`}</span>
+ </h3>
+ <button 
+ type="button" 
+ onClick={() => setShowSendLessonModal(null)} 
+ className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs transition-colors cursor-pointer"
+ >
+ </button>
+ </div>
+
+ <div className="grid grid-cols-2 gap-3">
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{t('grade')}</label>
+ <select value={lessonGrade} onChange={(e) => setLessonGrade(e.target.value)} className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs focus:outline-none">
+ {safeGrades.map((g) => (
+ <option key={g.id} value={g.name}>{g.name}</option>
+ ))}
+ </select>
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{isAr ? 'الشعبة' : 'Classroom'}</label>
+ <select value={lessonClass} onChange={(e) => setLessonClass(e.target.value)} className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs focus:outline-none">
+ {safeClassrooms.map((c) => (
+ <option key={c.id} value={c.sectionName}>{c.sectionName}</option>
+ ))}
+ </select>
+ </div>
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{isAr ? 'عنوان الدرس الشارح' : 'Lesson Title'} <span className="text-red-500">*</span></label>
+ <input type="text" required value={lessonTitle} onChange={(e) => setLessonTitle(e.target.value)} placeholder="درس حل المعاملات الرياضية ص 45..." className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-[#0284C7]" />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700">{isAr ? 'تفاصيل الواجب المنزلي المطلوبة' : 'Homework Description'}</label>
+ <textarea rows={3} value={lessonHomework} onChange={(e) => setLessonHomework(e.target.value)} placeholder="حل التمارين من رقم 1 إلى 10 على دفتر الواجبات..." className="w-full bg-[#F8FAFC] border border-[#E2E8F0] text-[#0F172A] rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-[#0284C7]" />
+ </div>
+
+ <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+ <button type="button" onClick={() => setShowSendLessonModal(null)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold cursor-pointer">{t('cancel')}</button>
+ <button type="submit" className="px-5 py-2 btn-mustard rounded-xl text-xs font-bold shadow cursor-pointer">{isAr ? 'إرسال ونشر الآن ' : 'Send & Publish '}</button>
+ </div>
+ </form>
+ </div>,
+ document.body
+ )}
+
+  {/* Student Detail Modal - Portal to document.body */}
+  {showStudentDetailModal && createPortal((() => {
+    const targetPhone = (showStudentDetailModal.parentPhone || showStudentDetailModal.phone || showStudentDetailModal.id).trim();
+    const familySibs = safeStudents.filter(s => {
+      if (!s.parentPhone && !showStudentDetailModal.parentPhone) return s.id === showStudentDetailModal.id;
+      return (s.parentPhone && s.parentPhone.trim() === targetPhone) || (s.phone && s.phone.trim() === targetPhone) || s.id === showStudentDetailModal.id;
+    });
+    const activeSibs = familySibs.filter(s => !s.frozen);
+    
+    const combinedTotalUSD = activeSibs.reduce((sum, s) => sum + (s.isSpecialCase ? 0 : ((Number(s.tuitionTotal) || 0) + (Number(s.adminFees) || 0))), 0);
+    const combinedDiscountUSD = activeSibs.reduce((sum, s) => sum + (s.isSpecialCase ? 0 : (Number(s.tuitionDiscount) || 0)), 0);
+    const combinedPaidUSD = activeSibs.reduce((sum, s) => sum + (Number(s.tuitionPaid) || 0), 0);
+    const combinedRemUSD = Math.max(0, combinedTotalUSD - combinedDiscountUSD - combinedPaidUSD);
+    const combinedTransportUSD = activeSibs.reduce((sum, s) => sum + (s.hasTransport ? (Number(s.transportFee) || 0) : 0), 0);
+    
+    const parentTitle = showStudentDetailModal.parentName || (showStudentDetailModal.name ? showStudentDetailModal.name.split(' ').slice(1).join(' ') : 'ولي الأمر');
+
+    return (
+      <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[99999] flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
+        <div className="bg-white border-2 border-[#0284C7] rounded-3xl p-6 max-w-2xl w-full space-y-4 shadow-2xl animate-scale-up text-[#0F172A] relative max-h-[90vh] overflow-y-auto custom-scrollbar">
+          
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl font-black text-lg bg-[#0284C7]/10 text-[#0284C7] border-2 border-[#0284C7] flex items-center justify-center shrink-0">
+                {(parentTitle || 'و')[0]}
+              </div>
+              <div>
+                <h3 className="text-base font-black text-[#0F172A]">{parentTitle}</h3>
+                <p className="text-xs text-slate-500 font-mono mt-0.5">
+                  هاتف الأب: <span className="font-bold text-[#0284C7]">{showStudentDetailModal.parentPhone || showStudentDetailModal.phone || 'غير مسجل'}</span>
+                  {showStudentDetailModal.motherPhone && <span className="ms-3">هاتف الأم: <span className="font-bold text-[#0284C7]">{showStudentDetailModal.motherPhone}</span></span>}
+                </p>
+              </div>
+            </div>
+            <button 
+              onClick={() => setShowStudentDetailModal(null)} 
+              className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center font-black text-sm transition-colors cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Unified Financial Breakdown */}
+          <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-2">
+            <h4 className="text-xs font-black text-[#0284C7] border-b border-slate-200 pb-1.5 flex items-center justify-between">
+              <span>الملخص المالي الموّحد للعائلة ({familySibs.length} أبناء)</span>
+              <span className="text-[10px] text-slate-500 font-normal">المبالغ بالدولار USD</span>
+            </h4>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono text-center">
+              <div className="bg-white p-2 rounded-xl border border-slate-200">
+                <span className="text-slate-400 block text-[10px] font-sans">القسط السنوي:</span>
+                <span className="font-black text-[#0F172A] text-sm">${combinedTotalUSD}</span>
+              </div>
+              <div className="bg-white p-2 rounded-xl border border-slate-200">
+                <span className="text-slate-400 block text-[10px] font-sans">الخصم الممنوح:</span>
+                <span className="font-black text-emerald-600 text-sm">-${combinedDiscountUSD}</span>
+              </div>
+              <div className="bg-white p-2 rounded-xl border border-slate-200">
+                <span className="text-slate-400 block text-[10px] font-sans">المسدد للمدرسة:</span>
+                <span className="font-black text-[#0284C7] text-sm">${combinedPaidUSD}</span>
+              </div>
+              <div className="bg-white p-2 rounded-xl border border-slate-200">
+                <span className="text-red-500 block text-[10px] font-sans font-bold">المتبقي المستحق:</span>
+                {showStudentDetailModal.isSpecialCase || activeSibs.every(s => s.isSpecialCase) || (activeSibs.some(s => s.isSpecialCase) && combinedRemUSD === 0) ? (
+                  <span className="font-black text-amber-500 text-base block" title="حالة خاصة">⭐</span>
+                ) : (
+                  <span className="font-black text-red-600 text-sm">${combinedRemUSD}</span>
+                )}
+              </div>
+            </div>
+            {combinedTransportUSD > 0 && (
+              <div className="bg-sky-50 border border-sky-200 text-[#0284C7] text-xs font-bold p-2 rounded-xl flex items-center justify-between px-3 mt-1">
+                <span>اشتراك باص النقل الشهري:</span>
+                <span className="font-mono font-black">${combinedTransportUSD} USD / شهرياً</span>
+              </div>
+            )}
+          </div>
+
+          {/* Children & Students List */}
+          <div className="space-y-2">
+            <h4 className="text-xs font-black text-slate-700 flex items-center justify-between">
+              <span>الأبناء والحسابات المسجلة ({familySibs.length}):</span>
+              {currentRole === 'admin' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowStudentDetailModal(null);
+                    handleOpenAddSiblingToFamily(showStudentDetailModal);
+                  }}
+                  className="text-[11px] font-black text-[#0284C7] hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>+ إضافة ابن جديد للعائلة</span>
+                </button>
+              )}
+            </h4>
+
+            <div className="space-y-2.5 max-h-60 overflow-y-auto custom-scrollbar pr-1">
+              {familySibs.map((sib) => {
+                const isFrozen = Boolean(sib.frozen);
+                return (
+                  <div 
+                    key={sib.id}
+                    className={`p-3 rounded-2xl space-y-2 text-xs border-2 ${
+                      isFrozen ? 'bg-red-50 border-red-300 text-red-950' : 'bg-[#F8FAFC] border-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-7 h-7 rounded-full font-black text-xs flex items-center justify-center shrink-0 ${
+                          isFrozen ? 'bg-red-600 text-white' : 'bg-[#0284C7]/10 text-[#0284C7]'
+                        }`}>
+                          {(sib.name || 'ط')[0]}
+                        </div>
+                        <div>
+                          <h5 className="font-black text-[#0F172A] text-xs flex items-center gap-1.5 flex-wrap">
+                            <span>{sib.name}</span>
+                            {sib.isSpecialCase && (
+                              <span className="text-amber-500 font-bold text-sm inline-flex items-center gap-1" title="حالة خاصة">⭐</span>
+                            )}
+                            <span className="bg-sky-100 text-[#0284C7] text-[10px] px-2 py-0.5 rounded-full font-bold">
+                              {sib.grade} ({sib.classRoom || 'أ'})
+                            </span>
+                            {sib.isSpecialCase && (
+                              <span className="bg-amber-100 text-amber-800 text-[9px] px-2 py-0.5 rounded-full font-black border border-amber-300">
+                                حالة خاصة ($0)
+                              </span>
+                            )}
+                            {isFrozen && (
+                              <span className="bg-red-600 text-white text-[9px] px-2 py-0.5 rounded-full font-black">
+                                حساب مجمد
+                              </span>
+                            )}
+                          </h5>
+                        </div>
+                      </div>
+
+                      {/* Admin Row Actions */}
+                      {currentRole === 'admin' && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => updateStudent(sib.id, { frozen: !sib.frozen })}
+                            className={`p-1.5 rounded-lg font-bold text-[10px] cursor-pointer ${
+                              sib.frozen ? 'bg-red-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                            }`}
+                            title={sib.frozen ? 'إلغاء التجميد' : 'تجميد الحساب'}
+                          >
+                            {sib.frozen ? 'إلغاء التجميد' : 'تجميد'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setShowStudentDetailModal(null);
+                              handleOpenEditStudentModal(sib);
+                            }}
+                            className="p-1.5 bg-amber-50 text-amber-600 hover:bg-amber-100 rounded-lg cursor-pointer"
+                            title="تعديل الحساب"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (window.confirm(`هل أنت متأكد من حذف الطالب (${sib.name})؟`)) {
+                                deleteStudent(sib.id);
+                                setShowStudentDetailModal(null);
+                              }
+                            }}
+                            className="p-1.5 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg cursor-pointer"
+                            title="حذف الطالب"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Login credentials box */}
+                    <div className="grid grid-cols-2 gap-2 bg-white p-2 rounded-xl border border-slate-200 font-mono text-[11px]">
+                      <div>
+                        <span className="text-slate-400 font-sans block text-[9px]">اسم الحساب (Login):</span>
+                        <span className="font-black text-[#0284C7] dir-ltr block">{sib.username}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 font-sans block text-[9px]">كلمة المرور:</span>
+                        <span className="font-black text-red-600 dir-ltr block">{sib.password}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Ministry Clearance if available */}
+          {showStudentDetailModal.ministryClearance && (
+            <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 flex items-center justify-between text-xs">
+              <div>
+                <span className="text-amber-800 font-black block text-[10px]">إفادة تسجيل الوزارة:</span>
+                <span className="font-mono font-black text-amber-900">{showStudentDetailModal.ministryClearance}</span>
+              </div>
+              <button 
+                onClick={() => handlePrintClearance(showStudentDetailModal)}
+                className="flex items-center gap-1 bg-[#EF4444] text-white px-3 py-1.5 rounded-xl text-xs font-black hover:bg-red-600 cursor-pointer"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>طباعة الإفادة</span>
+              </button>
+            </div>
+          )}
+
+          {/* Modal Footer */}
+          <div className="pt-2 border-t border-slate-100 flex justify-end">
+            <button 
+              onClick={() => setShowStudentDetailModal(null)} 
+              className="px-6 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-black cursor-pointer"
+            >
+              إغلاق
+            </button>
+          </div>
+
+        </div>
+      </div>
+    );
+  })(),
+  document.body
+  )}
+
+ {/* Official Ministry Endorsement/Clearance Certificate for Printing */}
+ {studentToPrint && (
+ <div id="print-certificate-area" className="hidden print:block bg-white text-black p-10 max-w-[800px] mx-auto border-8 border-double border-amber-600 rounded-3xl space-y-8 font-sans relative text-right rtl">
+ 
+ {/* Printable Styles Override */}
+ <style dangerouslySetInnerHTML={{__html: `
+ @media print {
+ body * {
+ visibility: hidden;
+ }
+ #print-certificate-area, #print-certificate-area * {
+ visibility: visible;
+ }
+ #print-certificate-area {
+ position: absolute;
+ left: 0;
+ top: 0;
+ width: 100%;
+ height: 100%;
+ border: 8px double #d97706 !important;
+ border-radius: 24px !important;
+ background-color: white !important;
+ color: black !important;
+ padding: 40px !important;
+ box-sizing: border-box !important;
+ }
+ }
+ `}} />
+
+ {/* Certificate Header Banner */}
+ <div className="flex items-center justify-between border-b-4 border-amber-600 pb-4">
+ <div className="text-right space-y-1">
+ <h4 className="font-extrabold text-sm text-slate-800">الجمهورية اللبنانية</h4>
+ <h4 className="font-extrabold text-xs text-slate-600">وزارة التربية والتعليم العالي</h4>
+ <h5 className="font-bold text-[10px] text-slate-500">منطقة الإدارة التعليمية</h5>
+ </div>
+ 
+ {/* School Logo / Seal Placeholder */}
+ <div className="text-center space-y-1 flex flex-col items-center">
+ <div className="w-16 h-16 rounded-full border-4 border-amber-600 flex items-center justify-center font-black text-xl text-amber-700 bg-amber-50">
+ </div>
+ <span className="font-black text-xs text-amber-800">مدرسة الدعم التعليمي</span>
+ </div>
+
+ <div className="text-left space-y-1">
+ <h4 className="font-extrabold text-sm text-slate-800">مدرسة الدعم التعليمي الخاصة</h4>
+ <h4 className="font-extrabold text-xs text-slate-600">قسم التسجيل والملفات</h4>
+ <h5 className="font-bold text-[10px] text-slate-500">التاريخ: {new Date().toLocaleDateString('ar-YE')}</h5>
+ </div>
+ </div>
+
+ {/* Main Title */}
+ <div className="text-center space-y-2 py-4">
+ <h1 className="text-2xl font-black text-amber-800 underline decoration-double decoration-amber-600 underline-offset-8">إفادة تسجيل وتصديق رسمي</h1>
+ <p className="text-xs text-slate-500 font-bold">صادرة بموجب اللوائح الرسمية المصادق عليها من وزارة التربية والتعليم العالي</p>
+ </div>
+
+ {/* Verification Paragraph */}
+ <div className="text-sm text-slate-800 leading-loose text-justify font-medium">
+ بناءً على طلب ولي الأمر المذكور أدناه، تشهد إدارة **مدرسة الدعم التعليمي الخاصة** المرخصة رسمياً، بأن التلميذ المذكورة بياناته في الجدول أدناه قد تم تسجيله رسمياً في السجلات الأكاديمية للمدرسة للعام الدراسي الحالي، وتم منحه رقم الإفادة الرسمي المعتمد والموثق لدى وزارة التربية والتعليم العالي لتصنيف وتصديق الملفات الطلابية.
+ </div>
+
+ {/* Official Information Box */}
+ <div className="border-2 border-amber-600 rounded-2xl overflow-hidden shadow-xs">
+ <div className="grid grid-cols-2 border-b border-amber-600 bg-amber-50">
+ <div className="p-3 border-l border-amber-600">
+ <span className="text-[10px] text-slate-500 block font-bold">اسم التلميذ الكامل:</span>
+ <span className="font-black text-sm text-amber-950">{studentToPrint.name}</span>
+ </div>
+ <div className="p-3">
+ <span className="text-[10px] text-slate-500 block font-bold">اسم التلميذ بالإنجليزية:</span>
+ <span className="font-black text-xs text-slate-800 font-mono">{studentToPrint.nameEn || 'N/A'}</span>
+ </div>
+ </div>
+ 
+ <div className="grid grid-cols-2 border-b border-amber-600">
+ <div className="p-3 border-l border-amber-600">
+ <span className="text-[10px] text-slate-500 block font-bold">المرحلة الدراسية / الصف:</span>
+ <span className="font-black text-xs text-slate-800">{studentToPrint.grade}</span>
+ </div>
+ <div className="p-3">
+ <span className="text-[10px] text-slate-500 block font-bold">الشعبة المخصصة:</span>
+ <span className="font-black text-xs text-slate-800">الشعبة ({studentToPrint.classRoom || 'أ'})</span>
+ </div>
+ </div>
+
+ <div className="grid grid-cols-2 border-b border-amber-600">
+ <div className="p-3 border-l border-amber-600">
+ <span className="text-[10px] text-slate-500 block font-bold">اسم ولي الأمر:</span>
+ <span className="font-black text-xs text-slate-800">{studentToPrint.parentName || 'غير مسجل'}</span>
+ </div>
+ <div className="p-3">
+ <span className="text-[10px] text-slate-500 block font-bold">رقم التواصل المعتمد:</span>
+ <span className="font-black text-xs text-slate-800 font-mono">{studentToPrint.phone || 'N/A'}</span>
+ </div>
+ </div>
+
+ {/* Ministry Clearance Number (Golden Highlight row) */}
+ <div className="p-4 bg-amber-100/50 flex flex-col items-center justify-center text-center space-y-1">
+ <span className="text-amber-800 font-black text-xs tracking-wider">رقم إفادة تصنيف ملف الوزارة الرسمي</span>
+ <span className="font-mono font-black text-xl text-amber-950 bg-white border border-amber-500 px-6 py-1.5 rounded-xl shadow-inner select-all">
+ {studentToPrint.ministryClearance || 'PENDING-VERIFICATION'}
+ </span>
+ <span className="text-[9px] text-slate-500 font-bold">يرجى استخدام هذا الرقم كمرجع رسمي للملف في كافة المراسلات والتقارير الأكاديمية</span>
+ </div>
+ </div>
+
+ {/* Stamp and Signature Area */}
+ <div className="grid grid-cols-2 gap-8 pt-8 text-center text-xs">
+ 
+ {/* School stamp */}
+ <div className="border border-dashed border-slate-300 rounded-2xl p-4 space-y-16">
+ <span className="font-extrabold text-slate-800 block">توقيع وختم مدير المدرسة</span>
+ <div className="text-[10px] text-slate-400 font-bold">
+ تاريخ الإصدار: {new Date().toLocaleDateString('ar-YE')}
+ </div>
+ </div>
+
+ {/* Ministry validation stamp */}
+ <div className="border border-dashed border-slate-300 rounded-2xl p-4 space-y-16">
+ <span className="font-extrabold text-slate-800 block">خاص بتصديق وزارة التربية والتعليم العالي</span>
+ <div className="text-[9px] text-slate-400 font-bold">
+ (خاص بالدائرة التعليمية الرسمية لتوقيع وختم المندوب المعتمد)
+ </div>
+ </div>
+
+ </div>
+
+ {/* Footer warning */}
+ <div className="text-center text-[9px] text-slate-400 border-t border-slate-100 pt-4">
+ تعتبر هذه الإفادة لاغية أو غير صالحة إذا تم كشطها أو تغيير بياناتها الأساسية دون توقيع رسمي وختم حي من الإدارة المدرسية والوزارة المعنية.
+ </div>
+
+ </div>
+ )}
+
+ {/* Edit Student Modal - Portal to document.body */}
+ {showEditStudentModal && createPortal(
+ <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[99999] flex justify-center items-start overflow-y-auto p-4 sm:p-6">
+ <form
+ onSubmit={handleEditStudentSubmit}
+ className="bg-white dark:bg-[#1E293B] border-2 border-amber-500 rounded-3xl p-6 max-w-4xl w-full space-y-4 shadow-2xl animate-scale-up text-[#0F172A] dark:text-slate-100 relative my-auto text-right max-h-[85vh] overflow-y-auto custom-scrollbar"
+ >
+ <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+ <h3 className="text-base font-bold text-amber-700 dark:text-amber-400 flex items-center gap-2">
+ <Edit3 className="w-5 h-5 text-amber-500" />
+ <span>{isAr ? `تعديل ملف الطالب: ${showEditStudentModal.name}` : `Edit Student: ${showEditStudentModal.name}`}</span>
+ </h3>
+ <button 
+ type="button" 
+ onClick={() => setShowEditStudentModal(null)} 
+ className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-850 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 flex items-center justify-center font-bold text-xs transition-colors cursor-pointer"
+ >
+ </button>
+ </div>
+
+ <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">{isAr ? 'اسم الطالب الكامل' : 'Student Name'} <span className="text-red-500">*</span></label>
+ <input type="text" required value={editStuName} onChange={(e) => setEditStuName(e.target.value)} className="w-full bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-amber-500 text-right" />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">{isAr ? 'اسم الطالب (English)' : 'English Name'}</label>
+ <input type="text" value={editStuNameEn} onChange={(e) => setEditStuNameEn(e.target.value)} className="w-full bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-amber-500 text-right" />
+ </div>
+ </div>
+
+ {/* Parent Name & Phone Numbers */}
+ <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-right">
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">{isAr ? 'اسم ولي الأمر' : 'Parent Name'}</label>
+ <input type="text" value={editStuParentName} onChange={(e) => setEditStuParentName(e.target.value)} className="w-full bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-amber-500 text-right" />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">{isAr ? 'هاتف الأب / ولي الأمر' : 'Father Phone'}</label>
+ <input type="text" value={editStuParentPhone} onChange={(e) => setEditStuParentPhone(e.target.value)} className="w-full bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-amber-500 text-right" />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">{isAr ? 'هاتف الأم' : "Mother's Phone"}</label>
+ <input type="text" value={editStuMotherPhone} onChange={(e) => setEditStuMotherPhone(e.target.value)} className="w-full bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-amber-500 text-right" />
+ </div>
+ </div>
+
+ {/* Ministry Clearance Number (Optional) */}
+ <div className="space-y-1 text-right">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5 justify-end">
+ <Bookmark className="w-4 h-4 text-amber-500 fill-amber-500" />
+ <span>{isAr ? 'رقم الإفادة المعتمد من الوزارة (اختياري - فريد)' : 'Ministry Clearance Reference No. (Unique - Optional)'}</span>
+ </label>
+ <input 
+ type="text" 
+ value={editStuMinistryClearance} 
+ onChange={(e) => setEditStuMinistryClearance(e.target.value)} 
+ placeholder={isAr ? "أدخل رقم الإفادة الوزارية الرسمي..." : "Enter unique Ministry clearance reference code..."} 
+ className="w-full bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-amber-500 text-right" 
+ />
+ </div>
+
+ <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">{t('username')} <span className="text-red-500">*</span></label>
+ <input type="text" required value={editStuUsername} onChange={(e) => setEditStuUsername(e.target.value)} className="w-full bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-amber-500 text-right" />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">{t('password')} <span className="text-red-500">*</span></label>
+ <input type="text" required value={editStuPassword} onChange={(e) => setEditStuPassword(e.target.value)} className="w-full bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-red-600 dark:text-red-400 font-extrabold rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-amber-500 text-right" />
+ </div>
+ </div>
+
+ {/* Grades and Classroom */}
+ <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">{t('grade')}</label>
+ <select
+ value={editStuGrade}
+ onChange={(e) => {
+ setEditStuGrade(e.target.value);
+ const foundGrd = safeGrades.find((g) => g.name === e.target.value);
+ if (foundGrd) {
+ setEditStuGradeEn(foundGrd.nameEn || e.target.value);
+ }
+ }}
+ className="w-full bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white rounded-xl px-3 py-2 text-xs focus:outline-none cursor-pointer font-bold"
+ >
+ {safeGrades.map((g) => (
+ <option key={g.id} value={g.name}>{isAr ? g.name : g.nameEn}</option>
+ ))}
+ </select>
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">{isAr ? 'الشعبة' : 'Classroom'}</label>
+ <select
+ value={editStuClassRoom}
+ onChange={(e) => setEditStuClassRoom(e.target.value)}
+ className="w-full bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white rounded-xl px-3 py-2 text-xs focus:outline-none cursor-pointer font-bold"
+ >
+ {safeClassrooms.map((c) => (
+ <option key={c.id} value={c.sectionName}>{isAr ? c.sectionName : c.sectionNameEn}</option>
+ ))}
+ </select>
+ </div>
+ </div>
+
+ {/* Tuition Fees & Discount */}
+ <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">{isAr ? 'إجمالي القسط السنوي ($)' : 'Total Tuition ($)'}</label>
+ <input type="number" value={editStuTuitionTotal} onChange={(e) => setEditStuTuitionTotal(e.target.value)} className="w-full bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white font-mono rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-amber-500 text-right" />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">{isAr ? 'الخصومات الممنوحة ($)' : 'Discounts ($)'}</label>
+ <input type="number" value={editStuTuitionDiscount} onChange={(e) => setEditStuTuitionDiscount(e.target.value)} className="w-full bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-emerald-600 dark:text-emerald-400 font-mono rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-amber-500 text-right" />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">{isAr ? 'المصاريف الإدارية ($)' : 'Admin Fees ($)'}</label>
+ <input type="number" value={editStuAdminFees} onChange={(e) => setEditStuAdminFees(e.target.value)} className="w-full bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-amber-600 dark:text-amber-400 font-mono rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-amber-500 text-right" />
+ </div>
+
+ <div className="space-y-1">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">{isAr ? 'المبلغ المدفوع ($)' : 'Paid Amount ($)'}</label>
+ <input type="number" value={editStuTuitionPaid} onChange={(e) => setEditStuTuitionPaid(e.target.value)} className="w-full bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white font-mono rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-amber-500 text-right" />
+ </div>
+ </div>
+
+ {/* Special Case Classification Checkbox */}
+ <div className="flex items-center justify-end gap-2 bg-amber-50/80 dark:bg-amber-950/30 p-3 rounded-2xl border border-amber-200 dark:border-amber-800 text-right">
+ <label htmlFor="editIsSpecialCase" className="text-xs font-black text-amber-900 dark:text-amber-300 cursor-pointer flex items-center gap-2">
+ <span>{isAr ? 'تصنيف الطالب ضمن «حالات خاصة»' : 'Classify as Special Case'}</span>
+ <input
+ type="checkbox"
+ id="editIsSpecialCase"
+ checked={editIsSpecialCase}
+ onChange={(e) => {
+ const checked = e.target.checked;
+ setEditIsSpecialCase(checked);
+ if (checked) {
+ setEditStuTuitionTotal('0');
+ }
+ }}
+ className="w-4 h-4 accent-amber-600 rounded cursor-pointer"
+ />
+ </label>
+ </div>
+
+ {/* Edit Transportation Details (Bus) */}
+ <div className="bg-sky-50/20 dark:bg-slate-900/50 p-4.5 rounded-2xl border border-sky-100/50 dark:border-slate-800 space-y-3.5 text-right">
+ <div className="flex items-center justify-end">
+ <label className="text-xs font-bold text-[#0284C7] dark:text-sky-400 flex items-center gap-1.5 cursor-pointer select-none">
+ <input
+ type="checkbox"
+ checked={editStuHasTransport}
+ onChange={(e) => setEditStuHasTransport(e.target.checked)}
+ className="w-4 h-4 accent-[#0284C7] rounded"
+ />
+ <span>{isAr ? 'هل يريد الطالب التسجيل في باص/نقل المدرسة؟' : 'Register for School Bus/Transport?'}</span>
+ </label>
+ </div>
+
+ {editStuHasTransport && (
+ <div className="space-y-1 max-w-xs ml-auto text-right">
+ <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">{isAr ? 'قيمة رسوم النقل ($ USD)' : 'Transportation Fee ($ USD)'} <span className="text-red-500">*</span></label>
+ <input
+ type="number"
+ required
+ value={editStuTransportFee}
+ onChange={(e) => setEditStuTransportFee(e.target.value)}
+ placeholder="50..."
+ className="w-full bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-[#0F172A] dark:text-white font-mono rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-[#0284C7] text-right"
+ />
+ </div>
+ )}
+ </div>
+
+ <div className="flex justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+ <button type="button" onClick={() => setShowEditStudentModal(null)} className="px-4 py-2 bg-slate-100 dark:bg-slate-850 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">{t('cancel')}</button>
+ <button type="submit" className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow cursor-pointer transition-colors">{t('save')}</button>
+ </div>
+ </form>
+ </div>,
+ document.body
+ )}
+
+ {/* Printable Students Roster Spreadsheet */}
+ {isPrintingStudentsTable && (
+ <div id="print-students-table-area" className="hidden print:block bg-white text-black p-8 font-sans text-right rtl">
+ <style dangerouslySetInnerHTML={{__html: `
+ @media print {
+ body * {
+ visibility: hidden;
+ }
+ #print-students-table-area, #print-students-table-area * {
+ visibility: visible;
+ }
+ #print-students-table-area {
+ position: absolute;
+ left: 0;
+ top: 0;
+ width: 100%;
+ background-color: white !important;
+ color: black !important;
+ }
+ }
+ `}} />
+ 
+ <div className="text-center space-y-2 border-b-2 border-amber-600 pb-4 mb-6">
+ <h1 className="text-xl font-black text-amber-800">مدرسة الدعم التعليمي الخاصة</h1>
+ <h2 className="text-base font-extrabold text-slate-700">كشف بيانات الطلاب والأقساط الدراسية</h2>
+ <p className="text-[10px] text-slate-500 font-bold">تاريخ استخراج الكشف: {new Date().toLocaleDateString('ar-YE')}</p>
+ </div>
+
+ <table className="w-full text-xs border-collapse border border-slate-300 text-right">
+ <thead>
+ <tr className="bg-slate-100 border border-slate-300">
+ <th className="p-2 border border-slate-300 font-extrabold">الرقم التعريفي (ID)</th>
+ <th className="p-2 border border-slate-300 font-extrabold">اسم التلميذ</th>
+ <th className="p-2 border border-slate-300 font-extrabold">الصف والشعبة</th>
+ <th className="p-2 border border-slate-300 font-extrabold">هاتف ولي الأمر</th>
+ <th className="p-2 border border-slate-300 font-extrabold">إجمالي القسط السنوي</th>
+ <th className="p-2 border border-slate-300 font-extrabold text-amber-800 bg-amber-50">الخصم الممنوح</th>
+ <th className="p-2 border border-slate-300 font-extrabold">المبلغ المدفوع</th>
+ <th className="p-2 border border-slate-300 font-extrabold">المبلغ المتبقي</th>
+ <th className="p-2 border border-slate-300 font-extrabold">رقم الإفادة الوزارية</th>
+ </tr>
+ </thead>
+ <tbody>
+ {filteredStudents.map((s) => {
+ const total = Number(s.tuitionTotal) || 0;
+ const discount = Number(s.tuitionDiscount) || 0;
+ const paid = Number(s.tuitionPaid) || 0;
+ const remaining = Math.max(0, total - discount - paid);
+ return (
+ <tr key={s.id} className="border border-slate-300">
+ <td className="p-2 border border-slate-300 font-mono font-bold">{s.id}</td>
+ <td className="p-2 border border-slate-300 font-extrabold">{s.name}</td>
+ <td className="p-2 border border-slate-300 font-bold">{s.grade} ({s.classRoom || 'أ'})</td>
+ <td className="p-2 border border-slate-300 font-mono">{s.phone || s.parentPhone || 'غير مسجل'}</td>
+ <td className="p-2 border border-slate-300 font-mono font-bold">${total}</td>
+ <td className="p-2 border border-slate-300 font-mono font-bold text-amber-700 bg-amber-50/50">-${discount}</td>
+ <td className="p-2 border border-slate-300 font-mono font-bold text-emerald-700">${paid}</td>
+ <td className="p-2 border border-slate-300 font-mono font-bold text-red-600">${remaining}</td>
+ <td className="p-2 border border-slate-300 font-mono">{s.ministryClearance || 'لا يوجد'}</td>
+ </tr>
+ );
+ })}
+ </tbody>
+ </table>
+
+ <div className="flex justify-between items-center mt-12 text-xs">
+ <div>
+ <span className="font-bold block">إجمالي عدد الطلاب المدرجين: {filteredStudents.length} طلاب</span>
+ </div>
+ <div className="text-center">
+ <span className="font-bold block">توقيع وختم الإدارة المالية</span>
+ <div className="w-32 h-16 border border-dashed border-slate-200 mt-2 mx-auto rounded-lg" />
+ </div>
+ </div>
+ </div>
+ )}
+
+ {/* Printable Teachers Roster Spreadsheet */}
+ {isPrintingTeachersTable && (
+ <div id="print-teachers-table-area" className="hidden print:block bg-white text-black p-8 font-sans text-right rtl">
+ <style dangerouslySetInnerHTML={{__html: `
+ @media print {
+ body * {
+ visibility: hidden;
+ }
+ #print-teachers-table-area, #print-teachers-table-area * {
+ visibility: visible;
+ }
+ #print-teachers-table-area {
+ position: absolute;
+ left: 0;
+ top: 0;
+ width: 100%;
+ background-color: white !important;
+ color: black !important;
+ }
+ }
+ `}} />
+ 
+ <div className="text-center space-y-2 border-b-2 border-amber-600 pb-4 mb-6">
+ <h1 className="text-xl font-black text-amber-800">مدرسة الدعم التعليمي الخاصة</h1>
+ <h2 className="text-base font-extrabold text-slate-700">كشف رواتب ومخصصات أعضاء هيئة التدريس</h2>
+ <p className="text-[10px] text-slate-500 font-bold">تاريخ استخراج الكشف: {new Date().toLocaleDateString('ar-YE')}</p>
+ </div>
+
+ <table className="w-full text-xs border-collapse border border-slate-300 text-right">
+ <thead>
+ <tr className="bg-slate-100 border border-slate-300">
+ <th className="p-2 border border-slate-300 font-extrabold">الرقم الوظيفي (ID)</th>
+ <th className="p-2 border border-slate-300 font-extrabold">اسم المعلم الكامل</th>
+ <th className="p-2 border border-slate-300 font-extrabold">المادة الأساسية</th>
+ <th className="p-2 border border-slate-300 font-extrabold">الصف والشعب المخصصة</th>
+ <th className="p-2 border border-slate-300 font-extrabold">الراتب الشهري الأساسي</th>
+ </tr>
+ </thead>
+ <tbody>
+ {teachers.map((t) => (
+ <tr key={t.id} className="border border-slate-300">
+ <td className="p-2 border border-slate-300 font-mono font-bold">{t.id}</td>
+ <td className="p-2 border border-slate-300 font-extrabold">{t.name}</td>
+ <td className="p-2 border border-slate-300 font-bold">{t.subject || 'غير محدد'}</td>
+ <td className="p-2 border border-slate-300">{(t.assignedClassrooms || []).join('، ') || 'عام'}</td>
+ <td className="p-2 border border-slate-300 font-mono font-bold text-amber-700">${t.monthlySalary || 0} USD</td>
+ </tr>
+ ))}
+ </tbody>
+ </table>
+
+ <div className="flex justify-between items-center mt-12 text-xs">
+ <div>
+ <span className="font-bold block">إجمالي عدد المعلمين المدرجين: {teachers.length} معلمين</span>
+ </div>
+ <div className="text-center">
+ <span className="font-bold block">توقيع وختم الشؤون المالية والموارد البشرية</span>
+ <div className="w-32 h-16 border border-dashed border-slate-200 mt-2 mx-auto rounded-lg" />
+ </div>
+ </div>
+ </div>
+ )}
+ </div>
+ );
+};
