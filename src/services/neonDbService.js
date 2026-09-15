@@ -169,26 +169,6 @@ export async function executeNeonQuery(sql) {
   const connectionUrl = getNeonConnectionUrl();
   if (!connectionUrl) return null;
 
-  // 1. Try server proxy endpoint first (bypasses browser CORS completely)
-  try {
-    const proxyUrl = typeof window !== 'undefined' && window.location && window.location.origin
-      ? (window.location.origin.includes('http') ? '/api/neon/query' : 'https://school-portal-1-dpd4.onrender.com/api/neon/query')
-      : 'https://school-portal-1-dpd4.onrender.com/api/neon/query';
-
-    const proxyRes = await fetch(proxyUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: sql, connectionUrl })
-    });
-    if (proxyRes.ok) {
-      const data = await proxyRes.json();
-      if (data && !data.error) return data;
-    }
-  } catch (err) {
-    // Server proxy fallback
-  }
-
-  // 2. Direct fetch to Neon endpoint (for mobile APK or fallback)
   try {
     const res = await fetch('https://ep-billowing-recipe-awh6dwin.c-12.us-east-1.aws.neon.tech/sql', {
       method: 'POST',

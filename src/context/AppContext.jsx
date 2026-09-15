@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { translations } from '../translations';
 import { 
  initialSubjects,
@@ -399,48 +399,38 @@ export const AppProvider = ({ children }) => {
  };
 
   // ─── Real-Time Cloud Sync (Neon Serverless PostgreSQL Database) ───────────
+  const isCloudLoadedRef = useRef(false);
+
   useEffect(() => {
     let isMounted = true;
     const fetchCloudData = async () => {
       try {
         const cloudData = await loadFromNeonCloud();
-        if (cloudData && isMounted) {
-          if (cloudData.school_students && Array.isArray(cloudData.school_students) && cloudData.school_students.length > 0) {
-            setStudents(cloudData.school_students);
-            dbSaveCollection('school_students', cloudData.school_students);
-          }
-          if (cloudData.school_subjects && Array.isArray(cloudData.school_subjects)) {
-            setSubjects(cloudData.school_subjects);
-            dbSaveCollection('school_subjects', cloudData.school_subjects);
-          }
-          if (cloudData.school_grades && Array.isArray(cloudData.school_grades)) {
-            setGrades(cloudData.school_grades);
-            dbSaveCollection('school_grades', cloudData.school_grades);
-          }
-          if (cloudData.school_classrooms && Array.isArray(cloudData.school_classrooms)) {
-            setClassrooms(cloudData.school_classrooms);
-            dbSaveCollection('school_classrooms', cloudData.school_classrooms);
-          }
-          if (cloudData.school_teachers && Array.isArray(cloudData.school_teachers)) {
-            setTeachers(cloudData.school_teachers);
-            dbSaveCollection('school_teachers', cloudData.school_teachers);
-          }
+        if (cloudData && isMounted && typeof cloudData === 'object' && Array.isArray(cloudData.school_students) && cloudData.school_students.length > 0) {
+          applyLoadedData(cloudData);
         }
       } catch (err) {
         console.warn('[Cloud Sync Fetch Warning]:', err);
+      } finally {
+        if (isMounted) {
+          isCloudLoadedRef.current = true;
+          setIsInitializingSync(false);
+        }
       }
     };
 
     fetchCloudData();
-    const interval = setInterval(fetchCloudData, 10000); // Poll cloud DB every 10s for multi-device sync
+    const interval = setInterval(fetchCloudData, 8000); // Poll cloud DB every 8s for multi-device sync
     return () => {
       isMounted = false;
       clearInterval(interval);
     };
   }, []);
 
-  // Auto-sync changes to Neon Cloud Database
+  // Auto-sync changes to Neon Cloud Database (ONLY after initial load completes)
   useEffect(() => {
+    if (!isCloudLoadedRef.current) return;
+
     if (students && students.length > 0) {
       const payload = {
         school_subjects: subjects,
@@ -461,11 +451,13 @@ export const AppProvider = ({ children }) => {
         school_attendance: attendance,
         school_behavior: behaviorRecords,
         school_notifications: notifications,
-        school_study_resources: studyResources
+        school_study_resources: studyResources,
+        school_system_users: systemUsers,
+        school_settings: siteSettings
       };
       saveToNeonCloud(payload).catch(() => {});
     }
-  }, [students, grades, classrooms, teachers, attendance, notifications]);
+  }, [students, grades, classrooms, teachers, masterTimetable, staffEmployees, exams, expenses, buses, messages, agenda, tutoringCourses, pushNotifs, dailyMarks, attendance, behaviorRecords, notifications, studyResources, systemUsers, siteSettings]);
 
  const getHonorRollStudents = (limit = 5) => {
  return (students || [])
@@ -752,6 +744,7 @@ export const AppProvider = ({ children }) => {
     if (Array.isArray(data.school_classrooms)) setClassrooms(data.school_classrooms);
     if (Array.isArray(data.school_students)) setStudents(data.school_students);
     if (Array.isArray(data.school_teachers)) setTeachers(data.school_teachers);
+    if (Array.isArray(data.school_timetable)) setMasterTimetable(data.school_timetable);
     if (Array.isArray(data.school_staff)) setStaffEmployees(data.school_staff);
     if (Array.isArray(data.school_exams)) setExams(data.school_exams);
     if (Array.isArray(data.school_expenses)) setExpenses(data.school_expenses);
@@ -760,69 +753,14 @@ export const AppProvider = ({ children }) => {
     if (Array.isArray(data.school_agenda)) setAgenda(data.school_agenda);
     if (Array.isArray(data.school_tutoring)) setTutoringCourses(data.school_tutoring);
     if (Array.isArray(data.school_push_notifs)) setPushNotifs(data.school_push_notifs);
+    if (Array.isArray(data.school_daily_marks)) setDailyMarks(data.school_daily_marks);
+    if (Array.isArray(data.school_attendance)) setAttendance(data.school_attendance);
+    if (Array.isArray(data.school_behavior)) setBehaviorRecords(data.school_behavior);
+    if (Array.isArray(data.school_notifications)) setNotifications(data.school_notifications);
+    if (Array.isArray(data.school_study_resources)) setStudyResources(data.school_study_resources);
     if (Array.isArray(data.school_system_users)) setSystemUsers(data.school_system_users);
     if (data.school_settings && typeof data.school_settings === 'object') setSiteSettings(data.school_settings);
   };
-
-  // 1. Load database from server & Neon Cloud DB on mount
-  useEffect(() => {
-    let isMounted = true;
-
-    async function initLoad() {
-      // First try local API server
-      try {
-        const res = await fetch('/api/db/load', {
-          headers: { 'x-sync-token': 'sp-secure-wifi-sync-token-2026' }
-        });
-        if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
-          const localServerData = await res.json();
-          if (isMounted && localServerData && Object.keys(localServerData).length > 0) {
-            applyLoadedData(localServerData);
-          }
-        }
-      } catch (err) {
-        // Local dev API server not active or unreachable
-      }
-
-      // Then load latest from Neon PostgreSQL Cloud DB
-      try {
-        const neonCloudData = await loadFromNeonCloud();
-        if (isMounted && neonCloudData && typeof neonCloudData === 'object' && Array.isArray(neonCloudData.school_students) && neonCloudData.school_students.length > 0) {
-          applyLoadedData(neonCloudData);
-        } else if (isMounted) {
-          // If Neon Cloud is empty or missing data, push current local data to Neon Cloud immediately!
-          const dbPayload = {
-            school_subjects: subjects,
-            school_grades: grades,
-            school_classrooms: classrooms,
-            school_students: students,
-            school_teachers: teachers,
-            school_staff: staffEmployees,
-            school_exams: exams,
-            school_expenses: expenses,
-            school_buses: buses,
-            school_messages: messages,
-            school_agenda: agenda,
-            school_tutoring: tutoringCourses,
-            school_push_notifs: pushNotifs,
-            school_system_users: systemUsers,
-            school_settings: siteSettings
-          };
-          saveToNeonCloud(dbPayload).catch(() => {});
-        }
-      } catch (err) {
-        console.error('[Neon Initial Sync Error]:', err);
-      }
-
-      if (isMounted) {
-        setIsInitializingSync(false);
-      }
-    }
-
-    initLoad();
-
-    return () => { isMounted = false; };
-  }, []);
 
   const syncLocalToNeonCloud = async () => {
     const dbPayload = {
