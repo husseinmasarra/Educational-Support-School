@@ -185,6 +185,38 @@ export const ExamsModule = () => {
  }
  };
 
+ // Save single student marks across all subjects in Master View
+ const handleSaveStudentAllSubjects = (studentId) => {
+ const typeLabel = activeTerm === 'final_term' ? 'الفصل الأخير' : 'الفصل الأول';
+ safeSubjects.forEach(sub => {
+ const val = getCellVal(studentId, sub.id);
+ if (val !== undefined && val !== '') {
+ const markNum = Number(val) || 0;
+ const evalText = calculateStudentLevel ? calculateStudentLevel(markNum) : (markNum >= 90 ? 'ممتاز' : markNum >= 80 ? 'جيد جداً' : markNum >= 70 ? 'جيد' : markNum >= 50 ? 'مقبول' : 'راسب');
+
+ const examObj = safeExams.find(ex => ex.subjectId === sub.id || (ex.subject && ex.subject.trim() === sub.name.trim())) || { id: `EXM-AUTO-${sub.id}` };
+ gradeExamResult(examObj.id, studentId, markNum, evalText);
+
+ if (addDailyMark) {
+ addDailyMark({
+ studentId,
+ subjectId: sub.id,
+ subjectName: sub.name,
+ score: markNum,
+ maxScore: 100,
+ type: typeLabel,
+ notes: evalText,
+ date: new Date().toISOString().split('T')[0]
+ });
+ }
+ }
+ });
+
+ setSavedToastMsg(isAr ? `تم حفظ كافة درجات الطالب لـ (${typeLabel}) وتحديث المجموع والمستوى بنجاح! ` : 'Student marks updated!');
+ setSavedToast(true);
+ setTimeout(() => setSavedToast(false), 3000);
+ };
+
  const buildStudentReportObj = (stu) => {
  // 1. Save student marks first
  handleSaveStudentAllSubjects(stu.id);
@@ -345,41 +377,8 @@ export const ExamsModule = () => {
  </div>
  </div>
  </div>
- );
- }
-
- // Save single student marks across all subjects in Master View
- const handleSaveStudentAllSubjects = (studentId) => {
- const typeLabel = activeTerm === 'final_term' ? 'الفصل الأخير' : 'الفصل الأول';
- safeSubjects.forEach(sub => {
- const val = getCellVal(studentId, sub.id);
- if (val !== undefined && val !== '') {
- const markNum = Number(val) || 0;
- const evalText = calculateStudentLevel ? calculateStudentLevel(markNum) : (markNum >= 90 ? 'ممتاز' : markNum >= 80 ? 'جيد جداً' : markNum >= 70 ? 'جيد' : markNum >= 50 ? 'مقبول' : 'راسب');
-
- const examObj = safeExams.find(ex => ex.subjectId === sub.id || (ex.subject && ex.subject.trim() === sub.name.trim())) || { id: `EXM-AUTO-${sub.id}` };
- gradeExamResult(examObj.id, studentId, markNum, evalText);
-
- if (addDailyMark) {
- addDailyMark({
- studentId,
- subjectId: sub.id,
- subjectName: sub.name,
- score: markNum,
- maxScore: 100,
- type: typeLabel,
- notes: evalText,
- date: new Date().toISOString().split('T')[0]
- });
- }
- }
- });
-
- setSavedToastMsg(isAr ? `تم حفظ كافة درجات الطالب لـ (${typeLabel}) وتحديث المجموع والمستوى بنجاح! ` : 'Student marks updated!');
- setSavedToast(true);
- setTimeout(() => setSavedToast(false), 3000);
- };
-
+  );
+}
  // Save ALL students and ALL subjects in one master click
  const handleSaveAllMasterMatrix = () => {
  const typeLabel = activeTerm === 'final_term' ? 'الفصل الأخير' : 'الفصل الأول';

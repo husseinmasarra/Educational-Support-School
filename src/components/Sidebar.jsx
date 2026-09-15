@@ -43,13 +43,6 @@ export const Sidebar = ({ activeTab: activeTabProp, setActiveTab: setActiveTabPr
  subjects: true
  });
 
- const toggleSection = (section, tabId = null, pillar = null) => {
- setOpenSections((prev) => ({ ...prev, [section]: !prev[section] }));
- if (tabId) {
- handleNavClick(tabId, pillar);
- }
- };
-
  const handleNavClick = (tabId, pillar = null) => {
  if (pillar && setActivePillar) {
  setActivePillar(pillar);
@@ -59,6 +52,13 @@ export const Sidebar = ({ activeTab: activeTabProp, setActiveTab: setActiveTabPr
  }
  if (window.innerWidth < 1024 && setIsOpen) {
  setIsOpen(false);
+ }
+ };
+
+ const toggleSection = (section, tabId = null, pillar = null) => {
+ setOpenSections((prev) => ({ ...prev, [section]: !prev[section] }));
+ if (tabId) {
+ handleNavClick(tabId, pillar);
  }
  };
 
