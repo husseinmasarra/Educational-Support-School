@@ -162,6 +162,8 @@ export function isValidNeonUrl(url) {
  return url.startsWith('postgres://') || url.startsWith('postgresql://');
 }
 
+import { neon } from '@neondatabase/serverless';
+
 /**
  * Execute SQL query on Neon Serverless PostgreSQL over HTTPS
  */
@@ -170,19 +172,24 @@ export async function executeNeonQuery(sql) {
   if (!connectionUrl) return null;
 
   try {
-    const res = await fetch('https://ep-billowing-recipe-awh6dwin.c-12.us-east-1.aws.neon.tech/sql', {
-      method: 'POST',
-      headers: {
-        'Neon-Connection-String': connectionUrl,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ query: sql })
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch (err) {
-    console.error('[Neon Direct Fetch Error]:', err);
-    return null;
+    const sqlQuery = neon(connectionUrl);
+    const rows = await sqlQuery.query(sql);
+    return { rows };
+  } catch (sdkErr) {
+    try {
+      const res = await fetch('https://ep-billowing-recipe-awh6dwin.c-12.us-east-1.aws.neon.tech/sql', {
+        method: 'POST',
+        headers: {
+          'Neon-Connection-String': connectionUrl
+        },
+        body: JSON.stringify({ query: sql })
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (err) {
+      console.error('[Neon Direct Fetch Error]:', err);
+      return null;
+    }
   }
 }
 
