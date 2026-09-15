@@ -24,6 +24,7 @@ import {
 } from '../initialData';
 import { initialSchoolSettings, dbLoadCollection, dbSaveCollection, dbInitOnce } from '../services/dbService';
 import { saveToNeonCloud, loadFromNeonCloud } from '../services/neonDbService';
+import { saveToSupabaseCloud, loadFromSupabaseCloud } from '../services/supabaseDbService';
 
 // Run one-time seed on very first app launch (never runs again after that)
 dbInitOnce({
@@ -431,16 +432,24 @@ export const AppProvider = ({ children }) => {
     if (data.school_settings && typeof data.school_settings === 'object') setSiteSettings(data.school_settings);
   };
 
-  // ─── Real-Time Cloud Sync (Neon Serverless PostgreSQL Database) ───────────
+  // ─── Real-Time Dual Cloud Sync (Supabase + Neon PostgreSQL Databases) ───────
   const isCloudLoadedRef = useRef(false);
 
   useEffect(() => {
     let isMounted = true;
     const fetchCloudData = async () => {
       try {
-        const cloudData = await loadFromNeonCloud();
-        if (cloudData && isMounted && typeof cloudData === 'object' && Array.isArray(cloudData.school_students) && cloudData.school_students.length > 0) {
-          applyLoadedData(cloudData);
+        // 1. Try loading from Supabase Cloud DB first
+        const supabaseData = await loadFromSupabaseCloud();
+        if (supabaseData && isMounted && typeof supabaseData === 'object' && Array.isArray(supabaseData.school_students) && supabaseData.school_students.length > 0) {
+          applyLoadedData(supabaseData);
+          return;
+        }
+
+        // 2. Fallback to Neon Cloud DB
+        const neonData = await loadFromNeonCloud();
+        if (neonData && isMounted && typeof neonData === 'object' && Array.isArray(neonData.school_students) && neonData.school_students.length > 0) {
+          applyLoadedData(neonData);
         }
       } catch (err) {
         console.warn('[Cloud Sync Fetch Warning]:', err);
@@ -460,7 +469,7 @@ export const AppProvider = ({ children }) => {
     };
   }, []);
 
-  // Auto-sync changes to Neon Cloud Database (ONLY after initial load completes)
+  // Auto-sync changes to Supabase & Neon Cloud Databases
   useEffect(() => {
     if (!isCloudLoadedRef.current) return;
 
@@ -488,6 +497,8 @@ export const AppProvider = ({ children }) => {
         school_system_users: systemUsers,
         school_settings: siteSettings
       };
+
+      saveToSupabaseCloud(payload).catch(() => {});
       saveToNeonCloud(payload).catch(() => {});
     }
   }, [students, grades, classrooms, teachers, masterTimetable, staffEmployees, exams, expenses, buses, messages, agenda, tutoringCourses, pushNotifs, dailyMarks, attendance, behaviorRecords, notifications, studyResources, systemUsers, siteSettings]);
