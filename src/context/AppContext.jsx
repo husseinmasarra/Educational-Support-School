@@ -397,6 +397,39 @@ export const AppProvider = ({ children }) => {
  return updated;
  });
  };
+  const [isInitializingSync, setIsInitializingSync] = useState(true);
+
+  const applyLoadedData = (data) => {
+    if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).length === 0) return;
+    
+    Object.entries(data).forEach(([key, val]) => {
+      if (val !== undefined && val !== null) {
+        try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+      }
+    });
+
+    if (Array.isArray(data.school_subjects)) setSubjects(data.school_subjects);
+    if (Array.isArray(data.school_grades)) setGrades(data.school_grades);
+    if (Array.isArray(data.school_classrooms)) setClassrooms(data.school_classrooms);
+    if (Array.isArray(data.school_students)) setStudents(data.school_students);
+    if (Array.isArray(data.school_teachers)) setTeachers(data.school_teachers);
+    if (Array.isArray(data.school_timetable)) setMasterTimetable(data.school_timetable);
+    if (Array.isArray(data.school_staff)) setStaffEmployees(data.school_staff);
+    if (Array.isArray(data.school_exams)) setExams(data.school_exams);
+    if (Array.isArray(data.school_expenses)) setExpenses(data.school_expenses);
+    if (Array.isArray(data.school_buses)) setBuses(data.school_buses);
+    if (Array.isArray(data.school_messages)) setMessages(data.school_messages);
+    if (Array.isArray(data.school_agenda)) setAgenda(data.school_agenda);
+    if (Array.isArray(data.school_tutoring)) setTutoringCourses(data.school_tutoring);
+    if (Array.isArray(data.school_push_notifs)) setPushNotifs(data.school_push_notifs);
+    if (Array.isArray(data.school_daily_marks)) setDailyMarks(data.school_daily_marks);
+    if (Array.isArray(data.school_attendance)) setAttendance(data.school_attendance);
+    if (Array.isArray(data.school_behavior)) setBehaviorRecords(data.school_behavior);
+    if (Array.isArray(data.school_notifications)) setNotifications(data.school_notifications);
+    if (Array.isArray(data.school_study_resources)) setStudyResources(data.school_study_resources);
+    if (Array.isArray(data.school_system_users)) setSystemUsers(data.school_system_users);
+    if (data.school_settings && typeof data.school_settings === 'object') setSiteSettings(data.school_settings);
+  };
 
   // ─── Real-Time Cloud Sync (Neon Serverless PostgreSQL Database) ───────────
   const isCloudLoadedRef = useRef(false);
@@ -728,39 +761,6 @@ export const AppProvider = ({ children }) => {
  }
  }, []);
 
-  const [isInitializingSync, setIsInitializingSync] = useState(true);
-
-  const applyLoadedData = (data) => {
-    if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).length === 0) return;
-    
-    Object.entries(data).forEach(([key, val]) => {
-      if (val !== undefined && val !== null) {
-        try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
-      }
-    });
-
-    if (Array.isArray(data.school_subjects)) setSubjects(data.school_subjects);
-    if (Array.isArray(data.school_grades)) setGrades(data.school_grades);
-    if (Array.isArray(data.school_classrooms)) setClassrooms(data.school_classrooms);
-    if (Array.isArray(data.school_students)) setStudents(data.school_students);
-    if (Array.isArray(data.school_teachers)) setTeachers(data.school_teachers);
-    if (Array.isArray(data.school_timetable)) setMasterTimetable(data.school_timetable);
-    if (Array.isArray(data.school_staff)) setStaffEmployees(data.school_staff);
-    if (Array.isArray(data.school_exams)) setExams(data.school_exams);
-    if (Array.isArray(data.school_expenses)) setExpenses(data.school_expenses);
-    if (Array.isArray(data.school_buses)) setBuses(data.school_buses);
-    if (Array.isArray(data.school_messages)) setMessages(data.school_messages);
-    if (Array.isArray(data.school_agenda)) setAgenda(data.school_agenda);
-    if (Array.isArray(data.school_tutoring)) setTutoringCourses(data.school_tutoring);
-    if (Array.isArray(data.school_push_notifs)) setPushNotifs(data.school_push_notifs);
-    if (Array.isArray(data.school_daily_marks)) setDailyMarks(data.school_daily_marks);
-    if (Array.isArray(data.school_attendance)) setAttendance(data.school_attendance);
-    if (Array.isArray(data.school_behavior)) setBehaviorRecords(data.school_behavior);
-    if (Array.isArray(data.school_notifications)) setNotifications(data.school_notifications);
-    if (Array.isArray(data.school_study_resources)) setStudyResources(data.school_study_resources);
-    if (Array.isArray(data.school_system_users)) setSystemUsers(data.school_system_users);
-    if (data.school_settings && typeof data.school_settings === 'object') setSiteSettings(data.school_settings);
-  };
 
   const syncLocalToNeonCloud = async () => {
     const dbPayload = {
