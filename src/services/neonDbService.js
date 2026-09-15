@@ -1,3 +1,5 @@
+import { neon } from '@neondatabase/serverless';
+
 /**
  * Neon PostgreSQL Serverless Database Integration & Schema Service
  * 
@@ -161,8 +163,6 @@ export function isValidNeonUrl(url) {
  if (!url) return false;
  return url.startsWith('postgres://') || url.startsWith('postgresql://');
 }
-
-import { neon } from '@neondatabase/serverless';
 
 /**
  * Execute SQL query on Neon Serverless PostgreSQL over HTTPS
