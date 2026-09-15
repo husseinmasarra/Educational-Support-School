@@ -398,6 +398,75 @@ export const AppProvider = ({ children }) => {
  });
  };
 
+  // ─── Real-Time Cloud Sync (Neon Serverless PostgreSQL Database) ───────────
+  useEffect(() => {
+    let isMounted = true;
+    const fetchCloudData = async () => {
+      try {
+        const cloudData = await loadFromNeonCloud();
+        if (cloudData && isMounted) {
+          if (cloudData.school_students && Array.isArray(cloudData.school_students) && cloudData.school_students.length > 0) {
+            setStudents(cloudData.school_students);
+            dbSaveCollection('school_students', cloudData.school_students);
+          }
+          if (cloudData.school_subjects && Array.isArray(cloudData.school_subjects)) {
+            setSubjects(cloudData.school_subjects);
+            dbSaveCollection('school_subjects', cloudData.school_subjects);
+          }
+          if (cloudData.school_grades && Array.isArray(cloudData.school_grades)) {
+            setGrades(cloudData.school_grades);
+            dbSaveCollection('school_grades', cloudData.school_grades);
+          }
+          if (cloudData.school_classrooms && Array.isArray(cloudData.school_classrooms)) {
+            setClassrooms(cloudData.school_classrooms);
+            dbSaveCollection('school_classrooms', cloudData.school_classrooms);
+          }
+          if (cloudData.school_teachers && Array.isArray(cloudData.school_teachers)) {
+            setTeachers(cloudData.school_teachers);
+            dbSaveCollection('school_teachers', cloudData.school_teachers);
+          }
+        }
+      } catch (err) {
+        console.warn('[Cloud Sync Fetch Warning]:', err);
+      }
+    };
+
+    fetchCloudData();
+    const interval = setInterval(fetchCloudData, 10000); // Poll cloud DB every 10s for multi-device sync
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Auto-sync changes to Neon Cloud Database
+  useEffect(() => {
+    if (students && students.length > 0) {
+      const payload = {
+        school_subjects: subjects,
+        school_grades: grades,
+        school_classrooms: classrooms,
+        school_students: students,
+        school_teachers: teachers,
+        school_timetable: masterTimetable,
+        school_staff: staffEmployees,
+        school_exams: exams,
+        school_expenses: expenses,
+        school_buses: buses,
+        school_messages: messages,
+        school_agenda: agenda,
+        school_tutoring: tutoringCourses,
+        school_push_notifs: pushNotifs,
+        school_daily_marks: dailyMarks,
+        school_attendance: attendance,
+        school_behavior: behaviorRecords,
+        school_notifications: notifications,
+        school_study_resources: studyResources
+      };
+      saveToNeonCloud(payload).catch(() => {});
+    }
+  }, [students, grades, classrooms, teachers, attendance, notifications]);
+
  const getHonorRollStudents = (limit = 5) => {
  return (students || [])
  .map(s => {
