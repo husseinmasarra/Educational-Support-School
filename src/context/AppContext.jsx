@@ -503,196 +503,165 @@ export const AppProvider = ({ children }) => {
     }
   }, [students, grades, classrooms, teachers, masterTimetable, staffEmployees, exams, expenses, buses, messages, agenda, tutoringCourses, pushNotifs, dailyMarks, attendance, behaviorRecords, notifications, studyResources, systemUsers, siteSettings]);
 
- const getHonorRollStudents = (limit = 5) => {
- return (students || [])
- .map(s => {
- const overallGpa = Number(getStudentOverallGpa(s.id));
- return {
- ...s,
- gpa: overallGpa
- };
- })
- .filter(s => s.gpa > 0) // Only include students with active graded GPAs
- .sort((a, b) => b.gpa - a.gpa)
- .slice(0, limit);
- };
+  // Aggregates real-time subject scores dynamically from dailyMarks and exam results
+  const getStudentSubjectScores = (studentId) => {
+    const studentMarks = (dailyMarks || []).filter((m) => m && String(m.studentId) === String(studentId));
+    
+    // Ensure baseSubjects has system subjects or initial default subjects if empty
+    const baseSubjects = (subjects && subjects.length > 0) ? subjects : initialSubjects;
+    const subjectMap = {};
 
- const addDailyMark = (markData) => {
- const newMark = {
- id: `DM-${Date.now().toString().slice(-4)}`,
- date: new Date().toISOString().split('T')[0],
- ...markData
- };
- setDailyMarks((prev) => {
- const updated = [newMark, ...prev];
- dbSaveCollection('school_daily_marks', updated);
- return updated;
- });
- };
+    baseSubjects.forEach((sub) => {
+      subjectMap[sub.name] = {
+        id: sub.id,
+        name: sub.name,
+        nameEn: sub.nameEn || sub.name,
+        hw: 0,
+        quiz: 0,
+        midterm: 0,
+        final: 0,
+        directTotal: null,
+        isGraded: false,
+        total: 0,
+        grade: 'غير مرصود'
+      };
+    });
 
- const updateDailyMark = (markId, updatedFields) => {
- setDailyMarks((prev) => {
- const updated = prev.map((m) => m.id === markId ? { ...m, ...updatedFields } : m);
- dbSaveCollection('school_daily_marks', updated);
- return updated;
- });
- };
+    // Collect exam results for this student from exams collection
+    (exams || []).forEach((ex) => {
+      if (!ex) return;
+      const res = (ex.results || []).find(r => r && String(r.studentId) === String(studentId));
+      if (res && res.score !== undefined && res.score !== null && res.score !== '') {
+        const subName = ex.subject || ex.title || 'الرياضيات';
+        let coreSubName = subName;
+        if (subName.includes('(') && subName.includes(')')) {
+          const match = subName.match(/\(([^)]+)\)/);
+          if (match && match[1]) coreSubName = match[1].trim();
+        }
 
- const deleteDailyMark = (markId) => {
- setDailyMarks((prev) => {
- const updated = prev.filter((m) => m.id !== markId);
- dbSaveCollection('school_daily_marks', updated);
- return updated;
- });
- };
+        let targetKey = Object.keys(subjectMap).find(
+          (key) => key === coreSubName || key.includes(coreSubName) || coreSubName.includes(key)
+        );
 
- // Aggregates real-time subject scores dynamically from dailyMarks and exam results
- const getStudentSubjectScores = (studentId) => {
- const studentMarks = (dailyMarks || []).filter((m) => m && String(m.studentId) === String(studentId));
- 
- // Ensure baseSubjects has system subjects or initial default subjects if empty
- const baseSubjects = (subjects && subjects.length > 0) ? subjects : initialSubjects;
- const subjectMap = {};
+        if (!targetKey) {
+          targetKey = coreSubName;
+          subjectMap[targetKey] = {
+            id: `SUB-${Date.now().toString().slice(-4)}`,
+            name: targetKey,
+            nameEn: targetKey,
+            hw: 0, quiz: 0, midterm: 0, final: 0, directTotal: null, isGraded: false, total: 0, grade: 'غير مرصود'
+          };
+        }
 
- baseSubjects.forEach((sub) => {
- subjectMap[sub.name] = {
- id: sub.id,
- name: sub.name,
- nameEn: sub.nameEn || sub.name,
- hw: 0,
- quiz: 0,
- midterm: 0,
- final: 0,
- directTotal: null,
- isGraded: false,
- total: 0,
- grade: 'غير مرصود'
- };
- });
+        const scoreNum = Number(res.score);
+        if (!isNaN(scoreNum)) {
+          subjectMap[targetKey].directTotal = scoreNum;
+          subjectMap[targetKey].isGraded = true;
+        }
+      }
+    });
 
- // Collect exam results for this student from exams collection
- (exams || []).forEach((ex) => {
- if (!ex) return;
- const res = (ex.results || []).find(r => r && String(r.studentId) === String(studentId));
- if (res && res.score !== undefined && res.score !== null && res.score !== '') {
- const subName = ex.subject || ex.title || 'الرياضيات';
- let coreSubName = subName;
- if (subName.includes('(') && subName.includes(')')) {
- const match = subName.match(/\(([^)]+)\)/);
- if (match && match[1]) coreSubName = match[1].trim();
- }
+    // Process dailyMarks for this student
+    studentMarks.forEach((m) => {
+      const sName = m.subjectName || m.subject;
+      if (!sName) return;
 
- let targetKey = Object.keys(subjectMap).find(
- (key) => key === coreSubName || key.includes(coreSubName) || coreSubName.includes(key)
- );
+      let coreSubName = sName;
+      if (sName.includes('(') && sName.includes(')')) {
+        const match = sName.match(/\(([^)]+)\)/);
+        if (match && match[1]) coreSubName = match[1].trim();
+      }
 
- if (!targetKey) {
- targetKey = coreSubName;
- subjectMap[targetKey] = {
- id: `SUB-${Date.now().toString().slice(-4)}`,
- name: targetKey,
- nameEn: targetKey,
- hw: 0, quiz: 0, midterm: 0, final: 0, directTotal: null, isGraded: false, total: 0, grade: 'غير مرصود'
- };
- }
+      let targetSubjectKey = Object.keys(subjectMap).find(
+        (key) => key === coreSubName || key.includes(coreSubName) || coreSubName.includes(key)
+      );
 
- const scoreNum = Number(res.score);
- if (!isNaN(scoreNum)) {
- subjectMap[targetKey].directTotal = scoreNum;
- subjectMap[targetKey].isGraded = true;
- }
- }
- });
+      if (!targetSubjectKey) {
+        targetSubjectKey = coreSubName;
+        subjectMap[targetSubjectKey] = {
+          id: `SUB-${Date.now().toString().slice(-4)}`,
+          name: targetSubjectKey,
+          nameEn: targetSubjectKey,
+          hw: 0, quiz: 0, midterm: 0, final: 0, directTotal: null, isGraded: false, total: 0, grade: 'غير مرصود'
+        };
+      }
 
- // Process dailyMarks for this student
- studentMarks.forEach((m) => {
- const sName = m.subjectName || m.subject;
- if (!sName) return;
+      const scoreNum = Number(m.score !== undefined ? m.score : (m.markValue !== undefined ? m.markValue : m.mark));
+      if (!isNaN(scoreNum)) {
+        subjectMap[targetSubjectKey].directTotal = scoreNum;
+        subjectMap[targetSubjectKey].isGraded = true;
 
- let coreSubName = sName;
- if (sName.includes('(') && sName.includes(')')) {
- const match = sName.match(/\(([^)]+)\)/);
- if (match && match[1]) coreSubName = match[1].trim();
- }
+        if (m.type === 'أعمال السنة' || m.type === 'daily_work' || m.type === 'homework') {
+          subjectMap[targetSubjectKey].hw = scoreNum;
+        } else if (m.type === 'اختبار قصير' || m.type === 'quiz') {
+          subjectMap[targetSubjectKey].quiz = scoreNum;
+        } else if (m.type === 'منتصف الفصل' || m.type === 'midterm') {
+          subjectMap[targetSubjectKey].midterm = scoreNum;
+        } else if (m.type === 'النهائي' || m.type === 'final') {
+          subjectMap[targetSubjectKey].final = scoreNum;
+        }
+      }
+    });
 
- let targetSubjectKey = Object.keys(subjectMap).find(
- (key) => key === coreSubName || key.includes(coreSubName) || coreSubName.includes(key)
- );
+    return Object.values(subjectMap).map((sub) => {
+      const hwVal = sub.hw || 0;
+      const quizVal = sub.quiz || 0;
+      const midtermVal = sub.midterm || 0;
+      const finalVal = sub.final || 0;
+      
+      let total = 0;
+      if (sub.directTotal !== null && sub.directTotal !== undefined) {
+        total = sub.directTotal;
+      } else if (hwVal > 0 || quizVal > 0 || midtermVal > 0 || finalVal > 0) {
+        total = hwVal + quizVal + midtermVal + finalVal;
+      }
 
- if (!targetSubjectKey) {
- targetSubjectKey = coreSubName;
- subjectMap[targetSubjectKey] = {
- id: `SUB-${Date.now().toString().slice(-4)}`,
- name: targetSubjectKey,
- nameEn: targetSubjectKey,
- hw: 0, quiz: 0, midterm: 0, final: 0, directTotal: null, isGraded: false, total: 0, grade: 'غير مرصود'
- };
- }
+      let grade = 'غير مرصود';
+      if (sub.isGraded || total > 0) {
+        if (total >= 90) grade = 'ممتاز';
+        else if (total >= 80) grade = 'جيد جداً';
+        else if (total >= 70) grade = 'جيد';
+        else if (total >= 50) grade = 'مقبول';
+        else grade = 'راسب';
+      }
 
- const scoreNum = Number(m.score !== undefined ? m.score : (m.markValue !== undefined ? m.markValue : m.mark));
- if (!isNaN(scoreNum)) {
- subjectMap[targetSubjectKey].directTotal = scoreNum;
- subjectMap[targetSubjectKey].isGraded = true;
+      return {
+        ...sub,
+        hw: hwVal,
+        quiz: quizVal,
+        midterm: midtermVal,
+        final: finalVal,
+        total,
+        grade
+      };
+    });
+  };
 
- if (m.type === 'أعمال السنة' || m.type === 'daily_work' || m.type === 'homework') {
- subjectMap[targetSubjectKey].hw = scoreNum;
- } else if (m.type === 'اختبار قصير' || m.type === 'quiz') {
- subjectMap[targetSubjectKey].quiz = scoreNum;
- } else if (m.type === 'منتصف الفصل' || m.type === 'midterm') {
- subjectMap[targetSubjectKey].midterm = scoreNum;
- } else if (m.type === 'النهائي' || m.type === 'final') {
- subjectMap[targetSubjectKey].final = scoreNum;
- }
- }
- });
+  // Computes overall GPA percentage
+  const getStudentOverallGpa = (studentId) => {
+    const scores = getStudentSubjectScores(studentId);
+    if (!scores || scores.length === 0) return 0;
+    
+    const gradedScores = scores.filter(s => s.isGraded || s.total > 0);
+    if (gradedScores.length === 0) return 0;
+    
+    const sum = gradedScores.reduce((acc, curr) => acc + Number(curr.total || 0), 0);
+    return (sum / gradedScores.length).toFixed(1);
+  };
 
- return Object.values(subjectMap).map((sub) => {
- const hwVal = sub.hw || 0;
- const quizVal = sub.quiz || 0;
- const midtermVal = sub.midterm || 0;
- const finalVal = sub.final || 0;
- 
- let total = 0;
- if (sub.directTotal !== null && sub.directTotal !== undefined) {
- // Keep the exact score entered by the user without modifying or capping
- total = sub.directTotal;
- } else if (hwVal > 0 || quizVal > 0 || midtermVal > 0 || finalVal > 0) {
- total = hwVal + quizVal + midtermVal + finalVal;
- }
-
- let grade = 'غير مرصود';
- if (sub.isGraded || total > 0) {
- if (total >= 90) grade = 'ممتاز';
- else if (total >= 80) grade = 'جيد جداً';
- else if (total >= 70) grade = 'جيد';
- else if (total >= 50) grade = 'مقبول';
- else grade = 'راسب';
- }
-
- return {
- ...sub,
- hw: hwVal,
- quiz: quizVal,
- midterm: midtermVal,
- final: finalVal,
- total,
- grade
- };
- });
- };
-
- // Computes overall GPA percentage
- const getStudentOverallGpa = (studentId) => {
- const scores = getStudentSubjectScores(studentId);
- if (!scores || scores.length === 0) return 0;
- 
- // Only calculate average based on subjects that have actually received a score
- const gradedScores = scores.filter(s => s.isGraded || s.total > 0);
- if (gradedScores.length === 0) return 0;
- 
- const sum = gradedScores.reduce((acc, curr) => acc + Number(curr.total || 0), 0);
- return (sum / gradedScores.length).toFixed(1);
- };
+  const getHonorRollStudents = (limit = 5) => {
+    return (students || [])
+      .map(s => {
+        const overallGpa = Number(getStudentOverallGpa(s.id));
+        return {
+          ...s,
+          gpa: overallGpa
+        };
+      })
+      .filter(s => s.gpa > 0)
+      .sort((a, b) => b.gpa - a.gpa)
+      .slice(0, limit);
+  };
 
  // Dynamic formula helper per user directive: >=90 "ممتاز", >=80 "جيد جداً", >=70 "جيد", >=50 "مقبول", <50 "راسب"
  const calculateStudentLevel = (score) => {
